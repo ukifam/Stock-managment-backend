@@ -2,8 +2,9 @@ const router = require('express').Router()
 const inventoryController = require('../controllers/inventoryController')
 
 router.get('/', inventoryController.listInventory)
-router.get('/:sku', inventoryController.getInventoryItem)
+router.post('/import', inventoryController.bulkImportInventory)
 router.post('/', inventoryController.createInventoryItem)
+router.get('/:sku', inventoryController.getInventoryItem)
 router.patch('/:sku', inventoryController.updateInventoryItem)
 
 module.exports = router

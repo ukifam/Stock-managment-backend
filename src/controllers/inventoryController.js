@@ -12,6 +12,10 @@ async function createInventoryItem(req, res) {
   res.status(201).json(await inventoryService.createInventoryItem(req.body))
 }
 
+async function bulkImportInventory(req, res) {
+  res.status(201).json(await inventoryService.bulkImportInventory(req.body.rows || req.body))
+}
+
 async function updateInventoryItem(req, res) {
   res.json(await inventoryService.updateInventoryItem(req.params.sku, req.body))
 }
@@ -20,5 +24,6 @@ module.exports = {
   listInventory,
   getInventoryItem,
   createInventoryItem,
+  bulkImportInventory,
   updateInventoryItem,
 }

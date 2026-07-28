@@ -23,12 +23,20 @@ const seedData = {
     profile: { displayName: 'System Operator 01', email: 'operator@quantum-ai.nexus' },
     system: { darkMode: true, biometricLogin: false, telemetryReports: true, quantumSync: true },
     inventory: { lowStockThreshold: 25, autoBackupFrequency: 'Daily at 00:00', externalDatabase: 'node-72.nexus.cloud' },
+    financial: { currency: 'RWF' },
     hardware: [
       { name: 'Handheld Scanner #02', status: 'online' },
       { name: 'Thermal Label Printer', status: 'online' },
       { name: 'Precision Scale v4', status: 'attention' },
     ],
   },
+  venues: [
+    { name: 'Central Warehouse', code: 'WH-001', type: 'Warehouse', location: 'Kigali', address: '123 Industrial Park Road, Kigali, Rwanda', capacity: 5000, manager: 'James Muiruri', contact: '+250-787-654-321', status: 'Active', notes: 'Main distribution center for East Africa' },
+    { name: 'Downtown Retail Store', code: 'RT-001', type: 'Retail', location: 'Kigali City Center', address: '456 Business District, Kigali', capacity: 500, manager: 'Sarah Johnson', contact: '+250-788-123-456', status: 'Active', notes: 'Primary retail outlet' },
+    { name: 'Regional Distribution Hub', code: 'DH-001', type: 'Distribution', location: 'Huye', address: '789 Commerce Avenue, Huye, Rwanda', capacity: 3000, manager: 'David Okonkwo', contact: '+250-789-876-543', status: 'Active', notes: 'Regional distribution center' },
+    { name: 'Kampala Branch', code: 'BR-001', type: 'Warehouse', location: 'Kampala, Uganda', address: '321 Export Zone, Kampala', capacity: 2000, manager: 'Amara Okafor', contact: '+256-703-456-789', status: 'Active', notes: 'Uganda operations hub' },
+    { name: 'Nairobi Storage', code: 'ST-001', type: 'Warehouse', location: 'Nairobi, Kenya', address: '654 Industrial Estate, Nairobi', capacity: 2500, manager: 'Priya Sharma', contact: '+254-722-123-456', status: 'Inactive', notes: 'Seasonal storage facility' },
+  ],
 }
 
 module.exports = seedData

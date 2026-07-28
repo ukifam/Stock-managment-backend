@@ -17,6 +17,9 @@ const settingSchema = new mongoose.Schema(
       autoBackupFrequency: { type: String, default: 'Daily at 00:00' },
       externalDatabase: { type: String, default: 'node-72.nexus.cloud' },
     },
+    financial: {
+      currency: { type: String, default: 'RWF' },
+    },
     hardware: [
       {
         name: { type: String, required: true },

@@ -1,14 +1,54 @@
 const storeModel = require('../models/storeModel')
 const httpError = require('../utils/httpError')
-const { filterByPeriod, searchRows } = require('../utils/filters')
+const { filterByPeriod, filterByRange, searchRows } = require('../utils/filters')
 const { saleDto } = require('../utils/formatters')
+const { currencyFromSettings } = require('../utils/settings')
 const { parseMoney, parseQuantity } = require('../utils/parsers')
 const { required } = require('../utils/validation')
+const CacheManager = require('../utils/cache')
 
-async function listSales({ period = 'yearly', search = '' }) {
+/**
+ * List sales with pagination, filtering, and caching
+ */
+async function listSales({ period = 'yearly', search = '', page = 1, limit = 50, status = '', from = '', to = '' }) {
+  const pageNum = Math.max(1, parseInt(page, 10) || 1)
+  const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10) || 50))
+
+  const cacheKey = `sales:list:${period}:${from}:${to}:${search}:${pageNum}:${limitNum}:${status}`
+  const cached = CacheManager.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+
   const store = await storeModel.readStore()
-  const rows = searchRows(filterByPeriod(store.sales, period), search)
-  return { rows: rows.map(saleDto), count: rows.length }
+  let rows = from || to ? filterByRange(store.sales, from, to) : filterByPeriod(store.sales, period)
+
+  if (status) {
+    rows = rows.filter((row) => row.status.toLowerCase() === status.toLowerCase())
+  }
+
+  if (search) {
+    rows = searchRows(rows, search)
+  }
+
+  const totalCount = rows.length
+  const totalPages = Math.ceil(totalCount / limitNum)
+  const skip = (pageNum - 1) * limitNum
+  const paginatedRows = rows.slice(skip, skip + limitNum)
+
+  const currency = currencyFromSettings(store.settings)
+  const result = {
+    rows: paginatedRows.map((row) => saleDto(row, currency)),
+    count: totalCount,
+    page: pageNum,
+    pageSize: limitNum,
+    totalPages,
+    hasNextPage: pageNum < totalPages,
+    hasPrevPage: pageNum > 1,
+  }
+
+  CacheManager.set(cacheKey, result, 60000)
+  return result
 }
 
 async function createSale(body) {
@@ -16,24 +56,58 @@ async function createSale(body) {
   if (missing.length) throw httpError(400, 'Missing required fields', { fields: missing })
 
   const store = await storeModel.readStore()
-  const sale = {
-    date: body.date || new Date().toISOString().slice(0, 10),
-    id: body.id || `SO-${Date.now().toString().slice(-6)}`,
-    customer: body.customer,
-    phone: body.phone || '',
-    item: body.item,
-    sku: body.sku || '',
-    category: body.category || 'Uncategorized',
-    quantity: parseQuantity(body.quantity ?? body.items, 1),
-    value: parseMoney(body.value ?? body.total, 0),
-    payment: body.payment || 'Credit',
-    status: body.status || 'Given',
-  }
-
+  const sale = buildSaleRecord(body, store, 0)
   applySaleToInventory(store, sale)
   store.sales.unshift(sale)
   await storeModel.writeStore(store)
-  return saleDto(sale)
+
+  CacheManager.clear()
+
+  return saleDto(sale, currencyFromSettings(store.settings))
+}
+
+async function bulkImportSales(bodies) {
+  if (!Array.isArray(bodies) || bodies.length === 0) {
+    throw httpError(400, 'No rows to import')
+  }
+
+  const store = await storeModel.readStore()
+  const currency = currencyFromSettings(store.settings)
+  const created = []
+  const failed = []
+
+  bodies.forEach((body, index) => {
+    const item = String(body.item || body.description || body.product || '').trim()
+    const customer = String(body.customer || body.name || '').trim()
+    if (!item || !customer) return
+
+    try {
+      const sale = buildSaleRecord({ ...body, item, customer }, store, index)
+      applySaleToInventory(store, sale)
+      store.sales.unshift(sale)
+      created.push(sale)
+    } catch (error) {
+      failed.push({
+        row: index + 1,
+        item,
+        message: error.message || 'Could not import sale row',
+      })
+    }
+  })
+
+  if (created.length === 0) {
+    throw httpError(400, failed[0]?.message || 'No valid sale rows were found in the file', { failed })
+  }
+
+  await storeModel.writeStore(store)
+  CacheManager.clear()
+
+  return {
+    count: created.length,
+    skipped: bodies.length - created.length - failed.length,
+    failed: failed.length,
+    rows: created.slice(0, 50).map((row) => saleDto(row, currency)),
+  }
 }
 
 async function updateSaleStatus(id, status) {
@@ -47,10 +121,72 @@ async function updateSaleStatus(id, status) {
   }
 
   await storeModel.writeStore(store)
-  return saleDto(store.sales[index])
+
+  // Clear caches after updating
+  CacheManager.clear()
+
+  return saleDto(store.sales[index], currencyFromSettings(store.settings))
 }
 
+async function updateSale(id, body) {
+  const missing = required(body, ['customer', 'item'])
+  if (missing.length) throw httpError(400, 'Missing required fields', { fields: missing })
+
+  const store = await storeModel.readStore()
+  const index = store.sales.findIndex((sale) => sale.id === id)
+  if (index === -1) throw httpError(404, 'Sale not found')
+
+  const previousSale = store.sales[index]
+  const quantity = parseQuantity(body.quantity ?? body.items, previousSale.quantity)
+  const value = parseMoney(body.value ?? body.total ?? previousSale.value, previousSale.value)
+  const payment = body.payment || previousSale.payment || 'Cash'
+  const paidAmount = resolvePaidAmount(body, value, payment, previousSale.paidAmount)
+  const outstanding = resolveOutstanding(body, value, paidAmount, payment, previousSale.outstanding)
+
+  const nextSale = {
+    ...previousSale,
+    date: body.date || previousSale.date,
+    id: body.id || previousSale.id,
+    customer: body.customer,
+    phone: body.phone || '',
+    item: body.item,
+    sku: body.sku || previousSale.sku || '',
+    category: body.category || previousSale.category || 'Uncategorized',
+    extractedText: body.extractedText ?? previousSale.extractedText ?? '',
+    quantity,
+    value,
+    payment,
+    paidAmount,
+    outstanding,
+    status: body.status || saleStatus(payment, outstanding),
+  }
+
+  if (nextSale.id !== previousSale.id && store.sales.some((sale, saleIndex) => saleIndex !== index && sale.id === nextSale.id)) {
+    throw httpError(409, 'Sale ID already exists')
+  }
+
+  removeSaleFromInventory(store, previousSale)
+  store.sales[index] = nextSale
+  applySaleToInventory(store, nextSale)
+  await storeModel.writeStore(store)
+
+  // Clear caches after updating
+  CacheManager.clear()
+
+  return saleDto(nextSale, currencyFromSettings(store.settings))
+}
+
+/**
+ * Get available items for sale with caching
+ */
 async function getAvailableItems() {
+  // Check cache first
+  const cacheKey = 'sales:available-items'
+  const cached = CacheManager.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+
   const store = await storeModel.readStore()
   const availableItems = store.inventory
     .filter((item) => Number(item.stock || 0) > 0 && item.status === 'Active')
@@ -63,14 +199,57 @@ async function getAvailableItems() {
     }))
     .sort((a, b) => a.item.localeCompare(b.item))
 
-  return { items: availableItems }
+  const result = { items: availableItems }
+  CacheManager.set(cacheKey, result, 60000)
+  return result
 }
 
 module.exports = {
   listSales,
   getAvailableItems,
   createSale,
+  bulkImportSales,
+  updateSale,
   updateSaleStatus,
+}
+
+function buildSaleRecord(body, store, index = 0) {
+  const quantity = parseQuantity(body.quantity ?? body.items, 1)
+  const value = parseMoney(body.value ?? body.total, 0)
+  const payment = body.payment || 'Cash'
+  const paidAmount = resolvePaidAmount(body, value, payment)
+  const outstanding = resolveOutstanding(body, value, paidAmount, payment)
+  const requestedId = String(body.id || body.saleid || '').trim()
+  let id = requestedId || `SO-${Date.now()}-${index}`
+
+  while (store.sales.some((sale) => sale.id === id)) {
+    id = `SO-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`
+  }
+
+  return {
+    date: body.date || new Date().toISOString().slice(0, 10),
+    id,
+    customer: body.customer,
+    phone: body.phone || body.contact || '',
+    item: body.item,
+    sku: body.sku || body.barcode || '',
+    category: body.category || 'Uncategorized',
+    extractedText: body.extractedText || '',
+    quantity,
+    value,
+    payment,
+    paidAmount,
+    outstanding,
+    status: body.status || saleStatus(payment, outstanding),
+  }
+}
+
+function removeSaleFromInventory(store, sale) {
+  const existing = findInventoryItem(store.inventory, sale)
+  if (!existing) return
+
+  existing.stock = Number(existing.stock || 0) + Number(sale.quantity || 0)
+  existing.status = inventoryStatus(existing.stock)
 }
 
 function applySaleToInventory(store, sale) {
@@ -84,19 +263,32 @@ function applySaleToInventory(store, sale) {
     throw httpError(400, `Only ${currentStock} units are available in stock`)
   }
 
+  sale.sku = existing.sku || sale.sku
+  sale.category = existing.category || sale.category
+  sale.item = existing.item || sale.item
   existing.stock = currentStock - saleQuantity
   existing.status = inventoryStatus(existing.stock)
 }
 
 function findInventoryItem(inventory, entry) {
-  const sku = String(entry.sku || '').trim().toLowerCase()
-  const item = String(entry.item || '').trim().toLowerCase()
+  const sku = normalizeText(entry.sku)
+  const item = normalizeText(entry.item)
 
   return inventory.find((row) => {
-    const rowSku = String(row.sku || '').trim().toLowerCase()
-    const rowItem = String(row.item || '').trim().toLowerCase()
-    return (sku && rowSku === sku) || (!sku && item && rowItem === item)
+    const rowSku = normalizeText(row.sku)
+    const rowItem = normalizeText(row.item)
+    return (sku && rowSku === sku) || itemMatches(rowItem, item)
   })
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ')
+}
+
+function itemMatches(rowItem, item) {
+  if (!rowItem || !item) return false
+  if (rowItem === item) return true
+  return rowItem.includes(item) || item.includes(rowItem)
 }
 
 function inventoryStatus(stock) {
@@ -104,4 +296,27 @@ function inventoryStatus(stock) {
   if (count <= 0) return 'Out of Stock'
   if (count <= 5) return 'Low'
   return 'Active'
+}
+
+function isCreditPayment(payment) {
+  return String(payment || '').toLowerCase() === 'credit'
+}
+
+function resolvePaidAmount(body, total, payment, fallback = 0) {
+  if (body.paidAmount !== undefined && body.paidAmount !== null && body.paidAmount !== '') {
+    return Math.min(total, Math.max(0, parseMoney(body.paidAmount, fallback)))
+  }
+  return isCreditPayment(payment) ? Math.min(total, Math.max(0, Number(fallback || 0))) : total
+}
+
+function resolveOutstanding(body, total, paidAmount, payment, fallback = 0) {
+  if (body.outstanding !== undefined && body.outstanding !== null && body.outstanding !== '') {
+    return Math.max(0, parseMoney(body.outstanding, fallback))
+  }
+  return isCreditPayment(payment) ? Math.max(0, total - paidAmount) : 0
+}
+
+function saleStatus(payment, outstanding) {
+  if (isCreditPayment(payment) && outstanding > 0) return 'Pending'
+  return 'Given'
 }

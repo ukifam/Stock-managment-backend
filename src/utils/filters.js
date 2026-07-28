@@ -2,6 +2,18 @@ function filterByPeriod(rows, period = 'yearly') {
   return rows.filter((row) => isInPeriod(row.date, period))
 }
 
+function filterByRange(rows, from, to) {
+  if (!from && !to) return rows
+  const fromDate = from ? parseDate(`${from}T00:00:00`) : new Date(-8640000000000000)
+  const toDate = to ? parseDate(`${to}T23:59:59.999`) : new Date(8640000000000000)
+  if (!fromDate || !toDate) return rows
+
+  return rows.filter((row) => {
+    const date = parseDate(`${row.date}T12:00:00`)
+    return date && date >= fromDate && date <= toDate
+  })
+}
+
 function searchRows(rows, query) {
   if (!query) return rows
   const needle = query.toLowerCase()
@@ -9,8 +21,9 @@ function searchRows(rows, query) {
 }
 
 function isInPeriod(value, period) {
-  const date = new Date(`${value}T12:00:00`)
+  const date = parseDate(`${value}T12:00:00`)
   const now = new Date()
+  if (!date) return false
 
   if (period === 'daily') return sameDay(date, now)
   if (period === 'weekly') return daysBetween(date, now) >= 0 && daysBetween(date, now) < 7
@@ -33,7 +46,13 @@ function daysBetween(left, right) {
   return Math.floor((end.getTime() - start.getTime()) / 86400000)
 }
 
+function parseDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
 module.exports = {
   filterByPeriod,
+  filterByRange,
   searchRows,
 }
