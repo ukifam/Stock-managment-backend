@@ -2,7 +2,7 @@ const storeModel = require('../models/storeModel')
 const { filterByPeriod, filterByRange } = require('../utils/filters')
 const { formatCurrency, purchaseDto, saleDto, expenseDto } = require('../utils/formatters')
 const { currencyFromSettings } = require('../utils/settings')
-const { buildAverageUnitCostIndex, computeMatchedGrossProfit } = require('../utils/profitCalculator')
+const { buildAverageUnitCostIndex, computeMatchedGrossProfit, calculateSaleCostDetails } = require('../utils/profitCalculator')
 
 const CREDIT_PURCHASE_STATUSES = ['pending', 'delayed']
 
@@ -32,7 +32,7 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
   const reportPurchases = credit === 'purchasesCredit' ? purchases.filter(isCreditPurchase) : purchases
   const creditSummary = summarizeCreditTotals(sales, purchases, currency)
   const detailPurchases = buildDetailList(reportPurchases, 'Purchase', purchaseTransaction, currency)
-  const detailSales = buildDetailList(reportSales, 'Sale', saleTransaction, currency)
+  const detailSales = buildDetailList(reportSales, 'Sale', (row, currencyValue, typeValue) => saleTransaction(row, currencyValue, typeValue, purchases, purchaseCostIndex, store.inventory), currency)
   const detailExpenses = buildDetailList(expenses, 'Expense', expenseTransaction, currency)
   const reportTransactions = [...detailPurchases, ...detailSales, ...detailExpenses]
     .sort((a, b) => new Date(`${b.date}T12:00:00`) - new Date(`${a.date}T12:00:00`))
@@ -133,11 +133,12 @@ function purchaseTransaction(row, currency) {
   }
 }
 
-function saleTransaction(row, currency) {
+function saleTransaction(row, currency, typeValue, purchases = [], purchaseCostIndex = [], inventory = []) {
   const total = Number(row.value || 0)
   const paidAmount = getPaidAmount(row, total)
   const outstanding = getOutstanding(row, total, paidAmount)
   const dto = saleDto(row, currency)
+  const costDetails = calculateSaleCostDetails(row, purchases, purchaseCostIndex, inventory)
   return {
     ...dto,
     type: 'Sale',
@@ -148,6 +149,10 @@ function saleTransaction(row, currency) {
     outstanding: formatCurrency(outstanding, currency),
     rawPaidAmount: paidAmount,
     rawOutstanding: outstanding,
+    rawPurchasePrice: costDetails.totalCost,
+    purchasePrice: formatCurrency(costDetails.totalCost, currency),
+    rawUnitPrice: costDetails.unitCost,
+    unitPrice: formatCurrency(costDetails.unitCost, currency),
   }
 }
 

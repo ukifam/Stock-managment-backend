@@ -4,6 +4,7 @@ const { filterByPeriod, filterByRange, searchRows } = require('../utils/filters'
 const { saleDto } = require('../utils/formatters')
 const { currencyFromSettings } = require('../utils/settings')
 const { parseMoney, parseQuantity } = require('../utils/parsers')
+const { formatDocumentId } = require('../utils/idFormatter')
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
 
@@ -220,10 +221,10 @@ function buildSaleRecord(body, store, index = 0) {
   const paidAmount = resolvePaidAmount(body, value, payment)
   const outstanding = resolveOutstanding(body, value, paidAmount, payment)
   const requestedId = String(body.id || body.saleid || '').trim()
-  let id = requestedId || `SO-${Date.now()}-${index}`
+  let id = requestedId || formatDocumentId('SO', { ...body, date: body.date || new Date().toISOString().slice(0, 10) }, new Date())
 
   while (store.sales.some((sale) => sale.id === id)) {
-    id = `SO-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`
+    id = `${id}-${Math.random().toString(36).slice(2, 6)}`
   }
 
   return {

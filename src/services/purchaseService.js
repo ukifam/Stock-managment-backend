@@ -4,6 +4,7 @@ const { filterByPeriod, filterByRange, searchRows } = require('../utils/filters'
 const { purchaseDto } = require('../utils/formatters')
 const { currencyFromSettings } = require('../utils/settings')
 const { parseMoney, parseQuantity } = require('../utils/parsers')
+const { formatDocumentId, normalizeDocumentId } = require('../utils/idFormatter')
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
 
@@ -181,10 +182,10 @@ function buildPurchaseRecord(body, store, index = 0) {
   const paidAmount = resolvePaidAmount(body, total, payment)
   const outstanding = resolveOutstanding(body, total, paidAmount, payment)
   const requestedId = String(body.id || body.purchaseid || '').trim()
-  let id = requestedId || `PO-${Date.now()}-${index}`
+  let id = requestedId || formatDocumentId('PO', { ...body, date: body.date || new Date().toISOString().slice(0, 10) }, new Date())
 
   while (store.purchases.some((purchase) => purchase.id === id)) {
-    id = `PO-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`
+    id = `${id}-${Math.random().toString(36).slice(2, 6)}`
   }
 
   return {

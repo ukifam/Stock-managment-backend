@@ -84,6 +84,11 @@ function resolveUnitCost(sale, costIndex, inventory = []) {
     }
   }
 
+  if (inv) {
+    const fallbackPrice = Number(inv.price || 0)
+    if (fallbackPrice > 0) return fallbackPrice
+  }
+
   return 0
 }
 
@@ -93,7 +98,6 @@ function computeMatchedGrossProfit(sales, purchaseCostIndex, inventory = [], pur
   const purchaseLots = buildPurchaseLots(purchases)
 
   sales.forEach((sale) => {
-    const qty = Number(sale.quantity || 1)
     const saleRevenue = Number(sale.value || 0)
     const unitCost = calculateSaleCost(sale, purchaseLots, purchaseCostIndex, inventory)
     revenue += saleRevenue
@@ -104,6 +108,17 @@ function computeMatchedGrossProfit(sales, purchaseCostIndex, inventory = [], pur
     revenue,
     costOfGoodsSold,
     grossProfit: revenue - costOfGoodsSold,
+  }
+}
+
+function calculateSaleCostDetails(sale, purchases = [], purchaseCostIndex = [], inventory = []) {
+  const saleQuantity = Number(sale.quantity || 1)
+  const purchaseLots = buildPurchaseLots(purchases)
+  const totalCost = calculateSaleCost(sale, purchaseLots, purchaseCostIndex, inventory)
+
+  return {
+    totalCost,
+    unitCost: saleQuantity > 0 ? totalCost / saleQuantity : 0,
   }
 }
 
@@ -176,4 +191,5 @@ module.exports = {
   productKey,
   buildAverageUnitCostIndex,
   computeMatchedGrossProfit,
+  calculateSaleCostDetails,
 }
