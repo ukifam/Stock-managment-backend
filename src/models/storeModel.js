@@ -5,6 +5,7 @@ const Sale = require('./Sale')
 const Expense = require('./Expense')
 const Setting = require('./Setting')
 const Venue = require('./Venue')
+const StockMovement = require('./StockMovement')
 
 async function ensureStore() {
   const inventoryCount = await Inventory.countDocuments()
@@ -13,6 +14,7 @@ async function ensureStore() {
   const expenseCount = await Expense.countDocuments()
   const settingsCount = await Setting.countDocuments()
   const venueCount = await Venue.countDocuments()
+  const stockMovementCount = await StockMovement.countDocuments()
 
   if (!inventoryCount) await Inventory.insertMany(seedData.inventory)
   if (!purchaseCount) await Purchase.insertMany(seedData.purchases)
@@ -22,6 +24,7 @@ async function ensureStore() {
   }
   if (!settingsCount) await Setting.create(seedData.settings)
   if (!venueCount) await Venue.insertMany(seedData.venues)
+  if (!stockMovementCount && seedData.stockMovements) await StockMovement.insertMany(seedData.stockMovements)
 }
 
 async function readStore() {
@@ -126,4 +129,5 @@ module.exports = {
   Sale,
   Setting,
   Venue,
+  StockMovement,
 }

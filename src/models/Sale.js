@@ -1,26 +1,42 @@
 const mongoose = require('mongoose')
 
+const saleItemSchema = new mongoose.Schema(
+  {
+    sku: { type: String, default: '' },
+    item: { type: String, required: true },
+    category: { type: String, default: 'General' },
+    quantity: { type: Number, required: true, default: 1 },
+    unitPrice: { type: Number, required: true, default: 0 },
+    total: { type: Number, required: true, default: 0 },
+  },
+  { _id: false }
+)
+
 const saleSchema = new mongoose.Schema(
   {
     date: { type: String, required: true, index: true },
     id: { type: String, required: true, unique: true, trim: true },
     customer: { type: String, required: true, index: true },
     phone: { type: String, default: '' },
-    item: { type: String, required: true },
+    item: { type: String, default: '' },
     sku: { type: String, default: '', index: true },
     category: { type: String, default: 'Uncategorized', index: true },
     extractedText: { type: String, default: '' },
     quantity: { type: Number, default: 1 },
+    subtotal: { type: Number, default: 0 },
+    discount: { type: Number, default: 0 },
+    tax: { type: Number, default: 0 },
     value: { type: Number, default: 0 },
-    payment: { type: String, default: 'Credit' },
+    payment: { type: String, default: 'Cash' },
     paidAmount: { type: Number, default: 0 },
     outstanding: { type: Number, default: 0 },
-    status: { type: String, default: 'Draft', index: true },
+    status: { type: String, default: 'Completed', index: true },
+    items: { type: [saleItemSchema], default: [] },
   },
   { timestamps: true }
-);
+)
 
 // Compound index for common queries
-saleSchema.index({ date: -1, status: 1 });
+saleSchema.index({ date: -1, status: 1 })
 
 module.exports = mongoose.model('Sale', saleSchema)

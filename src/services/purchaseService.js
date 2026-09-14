@@ -7,6 +7,7 @@ const { parseMoney, parseQuantity } = require('../utils/parsers')
 const { formatDocumentId, normalizeDocumentId } = require('../utils/idFormatter')
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
+const stockMovementService = require('./stockMovementService')
 
 /**
  * List purchases with pagination, filtering, and caching
@@ -61,6 +62,20 @@ async function createPurchase(body) {
   store.purchases.unshift(purchase)
   applyPurchaseToInventory(store, purchase)
   await storeModel.writeStore(store)
+
+  const existing = findInventoryItem(store.inventory, purchase)
+  if (existing) {
+    await stockMovementService.recordMovement({
+      date: purchase.date,
+      sku: existing.sku,
+      type: 'PURCHASE',
+      quantity: purchase.quantity,
+      previousStock: existing.stock - purchase.quantity,
+      newStock: existing.stock,
+      reason: 'Purchase received',
+      reference: purchase.id
+    })
+  }
 
   CacheManager.clear()
 
@@ -159,6 +174,20 @@ async function updatePurchase(id, body) {
   store.purchases[index] = nextPurchase
   applyPurchaseToInventory(store, nextPurchase)
   await storeModel.writeStore(store)
+
+  const existing = findInventoryItem(store.inventory, nextPurchase)
+  if (existing) {
+    await stockMovementService.recordMovement({
+      date: nextPurchase.date,
+      sku: existing.sku,
+      type: 'ADJUSTMENT', // Using adjustment for update to keep it simple, or purchase if we calculate diff
+      quantity: nextPurchase.quantity - previousPurchase.quantity,
+      previousStock: existing.stock - (nextPurchase.quantity - previousPurchase.quantity),
+      newStock: existing.stock,
+      reason: 'Purchase updated',
+      reference: nextPurchase.id
+    })
+  }
 
   // Clear caches after updating
   CacheManager.clear()

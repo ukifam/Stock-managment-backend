@@ -38,12 +38,36 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
     .sort((a, b) => new Date(`${b.date}T12:00:00`) - new Date(`${a.date}T12:00:00`))
     .slice(0, 12)
 
+  // Inventory Valuation & Health
+  const totalStockUnits = (store.inventory || []).reduce((sum, item) => sum + Number(item.stock || 0), 0)
+  const totalInventoryValuation = (store.inventory || []).reduce((sum, item) => sum + Number(item.stock || 0) * Number(item.price || 0), 0)
+  const lowStockCount = (store.inventory || []).filter(item => Number(item.stock || 0) <= Number(item.capacity || 25) && Number(item.stock || 0) > 0).length
+  const outOfStockCount = (store.inventory || []).filter(item => Number(item.stock || 0) <= 0).length
+
+  // Stock Discrepancies & Shrinkage from Movements
+  let allMovements = []
+  try {
+    allMovements = await storeModel.StockMovement.find({}).lean()
+  } catch (err) {
+    allMovements = []
+  }
+  const filteredMovements = selectRows(allMovements, period, from, to)
+  const shrinkageTypes = ['DAMAGE', 'LOSS', 'THEFT', 'ADJUSTMENT', 'PHYSICAL_COUNT', 'SUPPLIER_RETURN']
+  const inventoryPriceMap = new Map((store.inventory || []).map(i => [i.sku, Number(i.price || 0)]))
+  const inventoryNameMap = new Map((store.inventory || []).map(i => [i.sku, i.item]))
+
+  const discrepancies = filteredMovements.filter(m => shrinkageTypes.includes(m.type) || m.quantity < 0)
+  const totalLossUnits = Math.abs(discrepancies.filter(m => m.quantity < 0).reduce((sum, m) => sum + m.quantity, 0))
+  const totalLossValue = Math.abs(discrepancies.filter(m => m.quantity < 0).reduce((sum, m) => sum + (m.quantity * (inventoryPriceMap.get(m.sku) || 0)), 0))
+
   return {
     metrics: [
       { label: 'Total Sales', value: formatCurrency(revenue, currency), note: `${sales.length} transactions` },
       { label: 'Total Purchases', value: formatCurrency(purchaseCost, currency), note: `${purchases.length} purchases` },
       { label: 'Gross Profit', value: formatCurrency(grossProfit, currency), note: 'Sales minus cost of sold products' },
       { label: 'Net Profit', value: formatCurrency(netProfit, currency), note: 'After taxes and expenses' },
+      { label: 'Inventory Valuation', value: formatCurrency(totalInventoryValuation, currency), note: `${totalStockUnits} units in stock` },
+      { label: 'Stock Loss / Shrinkage', value: formatCurrency(totalLossValue, currency), note: `${totalLossUnits} units discrepancy` },
     ],
     reportBars: periodBars(reportSales, period, from, to),
     topProducts: topProducts(reportSales, currency),
@@ -53,6 +77,18 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
     detailPurchases,
     detailSales,
     detailExpenses,
+    inventoryValuation: {
+      totalUnits: totalStockUnits,
+      totalValuation: formatCurrency(totalInventoryValuation, currency),
+      rawValuation: totalInventoryValuation,
+      lowStockCount,
+      outOfStockCount,
+    },
+    stockDiscrepancies: discrepancies.slice(0, 50).map(d => ({
+      ...d,
+      item: inventoryNameMap.get(d.sku) || d.sku,
+      estimatedLoss: formatCurrency(Math.abs(d.quantity) * (inventoryPriceMap.get(d.sku) || 0), currency)
+    })),
     summary: {
       salesCount: reportSales.length,
       purchasesCount: reportPurchases.length,
@@ -71,6 +107,12 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
       salesCash: creditSummary.salesCash,
       salesOnCredit: creditSummary.salesOnCredit,
       totalPayments: formatCurrency(purchaseCost + expenseTotal, currency),
+      totalStockUnits,
+      totalInventoryValuation: formatCurrency(totalInventoryValuation, currency),
+      totalLossUnits,
+      totalLossValue: formatCurrency(totalLossValue, currency),
+      lowStockCount,
+      outOfStockCount,
     },
   }
 }
@@ -151,8 +193,8 @@ function saleTransaction(row, currency, typeValue, purchases = [], purchaseCostI
     rawOutstanding: outstanding,
     rawPurchasePrice: costDetails.totalCost,
     purchasePrice: formatCurrency(costDetails.totalCost, currency),
-    rawUnitPrice: costDetails.unitCost,
-    unitPrice: formatCurrency(costDetails.unitCost, currency),
+    rawUnitPrice: Number(row.quantity || 1) > 0 ? total / Number(row.quantity || 1) : 0,
+    unitPrice: formatCurrency(Number(row.quantity || 1) > 0 ? total / Number(row.quantity || 1) : 0, currency),
   }
 }
 

@@ -7,6 +7,7 @@ const { parseMoney, parseQuantity } = require('../utils/parsers')
 const { formatDocumentId } = require('../utils/idFormatter')
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
+const stockMovementService = require('./stockMovementService')
 
 /**
  * List sales with pagination, filtering, and caching
@@ -53,17 +54,122 @@ async function listSales({ period = 'yearly', search = '', page = 1, limit = 50,
 }
 
 async function createSale(body) {
-  const missing = required(body, ['customer', 'item'])
-  if (missing.length) throw httpError(400, 'Missing required fields', { fields: missing })
+  if (!body.customer) {
+    throw httpError(400, 'Customer name is required')
+  }
+
+  // Normalize items array
+  let saleItems = []
+  if (Array.isArray(body.items) && body.items.length > 0) {
+    saleItems = body.items.map((it) => ({
+      sku: String(it.sku || '').trim(),
+      item: String(it.item || '').trim(),
+      category: String(it.category || 'General').trim(),
+      quantity: Math.max(1, parseInt(it.quantity, 10) || 1),
+      unitPrice: Math.max(0, parseFloat(it.unitPrice) || 0),
+      total: Math.max(0, (parseInt(it.quantity, 10) || 1) * (parseFloat(it.unitPrice) || 0)),
+    }))
+  } else if (body.item) {
+    const qty = Math.max(1, parseInt(body.quantity, 10) || 1)
+    const val = parseFloat(body.value ?? body.total) || 0
+    const price = body.unitPrice ? parseFloat(body.unitPrice) : (qty ? val / qty : 0)
+    saleItems = [
+      {
+        sku: String(body.sku || '').trim(),
+        item: String(body.item || '').trim(),
+        category: String(body.category || 'General').trim(),
+        quantity: qty,
+        unitPrice: price,
+        total: val || qty * price,
+      },
+    ]
+  } else {
+    throw httpError(400, 'At least one sale item is required')
+  }
 
   const store = await storeModel.readStore()
-  const sale = buildSaleRecord(body, store, 0)
-  applySaleToInventory(store, sale)
+
+  // Verify stock availability for ALL items before deducting anything
+  const inventoryItemsToUpdate = []
+  for (const sItem of saleItems) {
+    const invItem = findInventoryItem(store.inventory, sItem)
+    if (!invItem) {
+      throw httpError(404, `Product not found in inventory: ${sItem.item || sItem.sku}`)
+    }
+    const currentStock = Number(invItem.stock || 0)
+    if (sItem.quantity > currentStock) {
+      throw httpError(400, `Insufficient stock for ${invItem.item} (SKU: ${invItem.sku}). Requested: ${sItem.quantity}, Available: ${currentStock}`)
+    }
+    sItem.sku = invItem.sku
+    sItem.item = invItem.item
+    sItem.category = invItem.category || sItem.category
+    inventoryItemsToUpdate.push({ invItem, saleItem: sItem, prevStock: currentStock })
+  }
+
+  // Deduct stock
+  for (const { invItem, saleItem, prevStock } of inventoryItemsToUpdate) {
+    invItem.stock = prevStock - saleItem.quantity
+    invItem.status = inventoryStatus(invItem.stock)
+  }
+
+  const subtotal = saleItems.reduce((sum, it) => sum + it.total, 0)
+  const discount = Math.max(0, parseFloat(body.discount) || 0)
+  const tax = Math.max(0, parseFloat(body.tax) || 0)
+  const total = Math.max(0, subtotal - discount + tax)
+  const payment = body.payment || 'Cash'
+  const paidAmount = resolvePaidAmount(body, total, payment, total)
+  const outstanding = resolveOutstanding(body, total, paidAmount, payment, Math.max(0, total - paidAmount))
+
+  const date = body.date || new Date().toISOString().slice(0, 10)
+  let id = String(body.id || body.saleid || '').trim() || formatDocumentId('SO', { ...body, date }, new Date())
+  while (store.sales.some((sale) => sale.id === id)) {
+    id = `${id}-${Math.random().toString(36).slice(2, 6)}`
+  }
+
+  const summaryItemText = saleItems.length === 1
+    ? saleItems[0].item
+    : `${saleItems.length} items (${saleItems.map((i) => `${i.item} × ${i.quantity}`).join(', ').slice(0, 50)}...)`
+
+  const sale = {
+    date,
+    id,
+    customer: body.customer,
+    phone: body.phone || body.contact || '',
+    item: summaryItemText,
+    sku: saleItems[0]?.sku || '',
+    category: saleItems[0]?.category || 'General',
+    extractedText: body.extractedText || '',
+    quantity: saleItems.reduce((sum, it) => sum + it.quantity, 0),
+    subtotal,
+    discount,
+    tax,
+    value: total,
+    payment,
+    paidAmount,
+    outstanding,
+    status: body.status || saleStatus(payment, outstanding),
+    items: saleItems,
+  }
+
   store.sales.unshift(sale)
   await storeModel.writeStore(store)
 
-  CacheManager.clear()
+  // Record individual stock movements for each item in the sale
+  for (const { invItem, saleItem, prevStock } of inventoryItemsToUpdate) {
+    await stockMovementService.recordMovement({
+      date,
+      sku: invItem.sku,
+      type: 'SALE',
+      quantity: -saleItem.quantity,
+      previousStock: prevStock,
+      newStock: invItem.stock,
+      reason: `Sale ${id} to ${body.customer}: ${saleItem.quantity}x ${saleItem.item}`,
+      reference: id,
+      user: body.user || 'Cashier',
+    })
+  }
 
+  CacheManager.clear()
   return saleDto(sale, currencyFromSettings(store.settings))
 }
 
@@ -170,6 +276,20 @@ async function updateSale(id, body) {
   store.sales[index] = nextSale
   applySaleToInventory(store, nextSale)
   await storeModel.writeStore(store)
+
+  const existing = findInventoryItem(store.inventory, nextSale)
+  if (existing) {
+    await stockMovementService.recordMovement({
+      date: nextSale.date,
+      sku: existing.sku,
+      type: 'ADJUSTMENT', // Treat as adjustment for update to keep simple
+      quantity: -(nextSale.quantity - previousSale.quantity),
+      previousStock: existing.stock + (nextSale.quantity - previousSale.quantity),
+      newStock: existing.stock,
+      reason: 'Sale updated',
+      reference: nextSale.id
+    })
+  }
 
   // Clear caches after updating
   CacheManager.clear()

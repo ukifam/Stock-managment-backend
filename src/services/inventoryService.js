@@ -6,6 +6,7 @@ const { currencyFromSettings } = require('../utils/settings')
 const { parseMoney, parseQuantity } = require('../utils/parsers')
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
+const stockMovementService = require('./stockMovementService')
 
 /**
  * List inventory with pagination, filtering, and caching
@@ -93,6 +94,16 @@ async function createInventoryItem(body) {
   store.inventory.unshift(item)
   await storeModel.writeStore(store)
 
+  await stockMovementService.recordMovement({
+    date: item.date,
+    sku: item.sku,
+    type: 'OPENING_STOCK',
+    quantity: item.stock,
+    previousStock: 0,
+    newStock: item.stock,
+    reason: 'Initial setup',
+  })
+
   CacheManager.clear()
 
   return inventoryDto(item, currencyFromSettings(store.settings))
@@ -122,6 +133,19 @@ async function bulkImportInventory(bodies) {
   }
 
   await storeModel.writeStore(store)
+
+  for (const item of created) {
+    await stockMovementService.recordMovement({
+      date: item.date,
+      sku: item.sku,
+      type: 'OPENING_STOCK',
+      quantity: item.stock,
+      previousStock: 0,
+      newStock: item.stock,
+      reason: 'Bulk import',
+    })
+  }
+
   CacheManager.clear()
 
   return {
@@ -139,7 +163,6 @@ async function updateInventoryItem(sku, body) {
   store.inventory[index] = {
     ...store.inventory[index],
     ...body,
-    stock: body.stock !== undefined ? parseQuantity(body.stock, store.inventory[index].stock) : store.inventory[index].stock,
     capacity: body.capacity !== undefined ? parseQuantity(body.capacity, store.inventory[index].capacity) : store.inventory[index].capacity,
     price: body.price !== undefined ? parseMoney(body.price, store.inventory[index].price) : store.inventory[index].price,
   }
