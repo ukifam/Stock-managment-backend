@@ -16,4 +16,8 @@ async function updateExpense(req, res) {
   res.json(await expenseService.updateExpense(req.params.id, req.body))
 }
 
-module.exports = { listExpenses, getExpense, createExpense, updateExpense }
+async function deleteExpense(req, res) {
+  res.json(await expenseService.deleteExpense(req.params.id))
+}
+
+module.exports = { listExpenses, getExpense, createExpense, updateExpense, deleteExpense }

@@ -7,5 +7,6 @@ router.post('/import', saleController.bulkImportSales)
 router.post('/', saleController.createSale)
 router.patch('/:id', saleController.updateSale)
 router.patch('/:id/status', saleController.updateSaleStatus)
+router.delete('/:id', saleController.deleteSale)
 
 module.exports = router

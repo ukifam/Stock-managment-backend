@@ -191,7 +191,26 @@ module.exports = {
   createInventoryItem,
   bulkImportInventory,
   updateInventoryItem,
+  deleteInventoryItem,
 }
+
+async function deleteInventoryItem(sku) {
+  const store = await storeModel.readStore()
+  const index = store.inventory.findIndex((row) => row.sku === sku)
+  if (index === -1) throw httpError(404, 'Inventory item not found')
+
+  store.inventory.splice(index, 1)
+  await storeModel.writeStore(store)
+  try {
+    const Inventory = require('../models/Inventory')
+    await Inventory.deleteOne({ ...storeModel.tenantFilter(), sku })
+  } catch (e) {
+    console.error('Error deleting inventory from MongoDB:', e)
+  }
+  CacheManager.clear()
+  return { success: true, sku }
+}
+
 
 function buildInventoryRecord(body, store, index = 0) {
   const requestedSku = String(body.sku || body.barcode || '').trim()

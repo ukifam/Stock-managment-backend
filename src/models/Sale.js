@@ -15,7 +15,9 @@ const saleItemSchema = new mongoose.Schema(
 const saleSchema = new mongoose.Schema(
   {
     date: { type: String, required: true, index: true },
-    id: { type: String, required: true, unique: true, trim: true },
+    ownerKey: { type: String, default: 'legacy', index: true },
+    ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
+    id: { type: String, required: true, trim: true },
     customer: { type: String, required: true, index: true },
     phone: { type: String, default: '' },
     item: { type: String, default: '' },
@@ -38,5 +40,6 @@ const saleSchema = new mongoose.Schema(
 
 // Compound index for common queries
 saleSchema.index({ date: -1, status: 1 })
+saleSchema.index({ ownerKey: 1, id: 1 }, { unique: true })
 
 module.exports = mongoose.model('Sale', saleSchema)

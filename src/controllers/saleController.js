@@ -24,6 +24,10 @@ async function updateSale(req, res) {
   res.json(await saleService.updateSale(req.params.id, req.body))
 }
 
+async function deleteSale(req, res) {
+  res.json(await saleService.deleteSale(req.params.id))
+}
+
 module.exports = {
   listSales,
   getAvailableItems,
@@ -31,4 +35,5 @@ module.exports = {
   bulkImportSales,
   updateSale,
   updateSaleStatus,
+  deleteSale,
 }

@@ -201,7 +201,26 @@ module.exports = {
   bulkImportPurchases,
   updatePurchase,
   updatePurchaseStatus,
+  deletePurchase,
 }
+
+async function deletePurchase(id) {
+  const store = await storeModel.readStore()
+  const index = store.purchases.findIndex((row) => row.id === id)
+  if (index === -1) throw httpError(404, 'Purchase not found')
+
+  store.purchases.splice(index, 1)
+  await storeModel.writeStore(store)
+  try {
+    const Purchase = require('../models/Purchase')
+    await Purchase.deleteOne({ ...storeModel.tenantFilter(), id })
+  } catch (e) {
+    console.error('Error deleting purchase from MongoDB:', e)
+  }
+  CacheManager.clear()
+  return { success: true, id }
+}
+
 
 function buildPurchaseRecord(body, store, index = 0) {
   const quantity = parseQuantity(body.quantity, 1)

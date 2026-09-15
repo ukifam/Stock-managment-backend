@@ -1,13 +1,15 @@
 const Loan = require('../models/Loan')
+const storeModel = require('../models/storeModel')
 
 async function generateLoanId(type) {
   const prefix = type === 'GIVEN' ? 'LG' : 'LT'
-  const count = await Loan.countDocuments({ type })
+  const count = await Loan.countDocuments({ ...storeModel.tenantFilter(), type })
   const nextNum = 1000 + count + 1
   return `${prefix}-${nextNum}`
 }
 
 async function listLoans({ type, status, search, page = 1, limit = 50 } = {}) {
+  await storeModel.ensureStore()
   const query = {}
   if (type) query.type = type.toUpperCase()
   if (status) query.status = status.toUpperCase()
@@ -24,15 +26,16 @@ async function listLoans({ type, status, search, page = 1, limit = 50 } = {}) {
 
   const skip = (Math.max(1, page) - 1) * limit
   const [rows, count] = await Promise.all([
-    Loan.find(query).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
-    Loan.countDocuments(query),
+    Loan.find(storeModel.scopedQuery(query)).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
+    Loan.countDocuments(storeModel.scopedQuery(query)),
   ])
 
   return { rows, count, page: Number(page), limit: Number(limit) }
 }
 
 async function getLoanById(id) {
-  const loan = await Loan.findOne({ id })
+  await storeModel.ensureStore()
+  const loan = await Loan.findOne({ ...storeModel.tenantFilter(), id })
   if (!loan) {
     throw new Error(`Loan with ID ${id} not found`)
   }
@@ -40,6 +43,7 @@ async function getLoanById(id) {
 }
 
 async function createLoan(payload) {
+  await storeModel.ensureStore()
   const type = payload.type ? payload.type.toUpperCase() : 'GIVEN'
   if (!['GIVEN', 'TAKEN'].includes(type)) {
     throw new Error("Loan type must be either 'GIVEN' or 'TAKEN'")
@@ -64,7 +68,7 @@ async function createLoan(payload) {
   const customId = payload.id || (await generateLoanId(type))
   const today = new Date().toISOString().slice(0, 10)
 
-  const loan = new Loan({
+  const loan = new Loan(storeModel.withTenantFields({
     id: customId,
     type,
     partyName: payload.partyName.trim(),
@@ -87,14 +91,15 @@ async function createLoan(payload) {
     collateral: payload.collateral || '',
     notes: payload.notes || '',
     repayments: [],
-  })
+  }))
 
   await loan.save()
   return loan
 }
 
 async function recordRepayment(id, payload) {
-  const loan = await Loan.findOne({ id })
+  await storeModel.ensureStore()
+  const loan = await Loan.findOne({ ...storeModel.tenantFilter(), id })
   if (!loan) {
     throw new Error(`Loan with ID ${id} not found`)
   }
@@ -128,7 +133,8 @@ async function recordRepayment(id, payload) {
 }
 
 async function updateLoan(id, payload) {
-  const loan = await Loan.findOne({ id })
+  await storeModel.ensureStore()
+  const loan = await Loan.findOne({ ...storeModel.tenantFilter(), id })
   if (!loan) {
     throw new Error(`Loan with ID ${id} not found`)
   }
@@ -158,7 +164,8 @@ async function updateLoan(id, payload) {
 }
 
 async function deleteLoan(id) {
-  const loan = await Loan.findOneAndDelete({ id })
+  await storeModel.ensureStore()
+  const loan = await Loan.findOneAndDelete({ ...storeModel.tenantFilter(), id })
   if (!loan) {
     throw new Error(`Loan with ID ${id} not found`)
   }
@@ -166,7 +173,8 @@ async function deleteLoan(id) {
 }
 
 async function getLoanMetrics() {
-  const loans = await Loan.find({})
+  await storeModel.ensureStore()
+  const loans = await Loan.find(storeModel.tenantFilter())
 
   let totalGivenPrincipal = 0
   let totalGivenOutstanding = 0

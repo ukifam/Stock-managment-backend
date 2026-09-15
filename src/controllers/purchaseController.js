@@ -20,10 +20,15 @@ async function updatePurchase(req, res) {
   res.json(await purchaseService.updatePurchase(req.params.id, req.body))
 }
 
+async function deletePurchase(req, res) {
+  res.json(await purchaseService.deletePurchase(req.params.id))
+}
+
 module.exports = {
   listPurchases,
   createPurchase,
   bulkImportPurchases,
   updatePurchase,
   updatePurchaseStatus,
+  deletePurchase,
 }

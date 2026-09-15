@@ -122,4 +122,23 @@ async function updateExpense(id, body) {
   return nextExpense
 }
 
-module.exports = { listExpenses, getExpense, createExpense, updateExpense }
+async function deleteExpense(id) {
+  const store = await storeModel.readStore()
+  store.expenses = store.expenses || []
+
+  const index = store.expenses.findIndex((expense) => expense.id === id || expense._id?.toString() === id)
+  if (index === -1) throw httpError(404, 'Expense not found')
+
+  store.expenses.splice(index, 1)
+  await storeModel.writeStore(store)
+  try {
+    const Expense = require('../models/Expense')
+    await Expense.deleteOne({ $or: [{ id }, { _id: id }] })
+  } catch (e) {
+    console.error('Error deleting expense from MongoDB:', e)
+  }
+  CacheManager.clear()
+  return { success: true, id }
+}
+
+module.exports = { listExpenses, getExpense, createExpense, updateExpense, deleteExpense }

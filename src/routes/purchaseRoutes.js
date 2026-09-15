@@ -6,5 +6,6 @@ router.post('/import', purchaseController.bulkImportPurchases)
 router.post('/', purchaseController.createPurchase)
 router.patch('/:id', purchaseController.updatePurchase)
 router.patch('/:id/status', purchaseController.updatePurchaseStatus)
+router.delete('/:id', purchaseController.deletePurchase)
 
 module.exports = router

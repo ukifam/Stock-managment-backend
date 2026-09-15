@@ -3,9 +3,11 @@ const mongoose = require('mongoose')
 const inventorySchema = new mongoose.Schema(
   {
     date: { type: String, required: true, index: true },
+    ownerKey: { type: String, default: 'legacy', index: true },
+    ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
     item: { type: String, required: true },
     meta: { type: String, default: '' },
-    sku: { type: String, required: true, unique: true, trim: true, index: true },
+    sku: { type: String, required: true, trim: true, index: true },
     category: { type: String, required: true, index: true },
     stock: { type: Number, default: 0 },
     capacity: { type: Number, default: 25 },
@@ -23,5 +25,6 @@ const inventorySchema = new mongoose.Schema(
 
 // Compound index for common queries
 inventorySchema.index({ status: 1, stock: 1 });
+inventorySchema.index({ ownerKey: 1, sku: 1 }, { unique: true });
 
 module.exports = mongoose.model('Inventory', inventorySchema)

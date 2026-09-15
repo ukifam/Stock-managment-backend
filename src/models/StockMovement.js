@@ -3,6 +3,8 @@ const mongoose = require('mongoose')
 const stockMovementSchema = new mongoose.Schema(
   {
     date: { type: String, required: true, index: true },
+    ownerKey: { type: String, default: 'legacy', index: true },
+    ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
     sku: { type: String, required: true, index: true },
     type: { 
       type: String, 
@@ -35,6 +37,6 @@ const stockMovementSchema = new mongoose.Schema(
 )
 
 // Index for getting movements for a specific item ordered by date
-stockMovementSchema.index({ sku: 1, createdAt: -1 });
+stockMovementSchema.index({ ownerKey: 1, sku: 1, createdAt: -1 });
 
 module.exports = mongoose.model('StockMovement', stockMovementSchema)

@@ -1,4 +1,5 @@
 const Venue = require('../models/Venue')
+const storeModel = require('../models/storeModel')
 const httpError = require('../utils/httpError')
 const CacheManager = require('../utils/cache')
 const { required } = require('../utils/validation')
@@ -7,6 +8,7 @@ const { required } = require('../utils/validation')
  * List venues with pagination, filtering, and caching
  */
 async function listVenues({ page = 1, limit = 50, type = '', status = '' } = {}) {
+  await storeModel.ensureStore()
   const pageNum = Math.max(1, parseInt(page, 10) || 1)
   const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10) || 50))
 
@@ -16,7 +18,7 @@ async function listVenues({ page = 1, limit = 50, type = '', status = '' } = {})
     return cached
   }
 
-  let query = Venue.find()
+  let query = Venue.find(storeModel.tenantFilter())
 
   if (type) {
     query = query.where('type').equals(type)
@@ -53,13 +55,14 @@ async function listVenues({ page = 1, limit = 50, type = '', status = '' } = {})
  * Get a single venue by code
  */
 async function getVenue(code) {
+  await storeModel.ensureStore()
   const cacheKey = `venue:${code}`
   const cached = CacheManager.get(cacheKey)
   if (cached) {
     return cached
   }
 
-  const venue = await Venue.findOne({ code }).lean()
+  const venue = await Venue.findOne({ ...storeModel.tenantFilter(), code }).lean()
   if (!venue) throw httpError(404, 'Venue not found')
 
   CacheManager.set(cacheKey, venue, 60000)
@@ -70,16 +73,17 @@ async function getVenue(code) {
  * Create a new venue
  */
 async function createVenue(body) {
+  await storeModel.ensureStore()
   const missing = required(body, ['name', 'code', 'type'])
   if (missing.length) throw httpError(400, 'Missing required fields', { fields: missing })
 
   // Check for duplicates
-  const existing = await Venue.findOne({ $or: [{ name: body.name }, { code: body.code }] })
+  const existing = await Venue.findOne(storeModel.scopedQuery({ $or: [{ name: body.name }, { code: body.code }] }))
   if (existing) {
     throw httpError(409, `Venue with name or code already exists`)
   }
 
-  const venue = new Venue({
+  const venue = new Venue(storeModel.withTenantFields({
     name: body.name,
     code: body.code.toUpperCase(),
     type: body.type || 'Warehouse',
@@ -90,7 +94,7 @@ async function createVenue(body) {
     contact: body.contact || '',
     status: body.status || 'Active',
     notes: body.notes || '',
-  })
+  }))
 
   await venue.save()
 
@@ -104,17 +108,18 @@ async function createVenue(body) {
  * Update a venue
  */
 async function updateVenue(code, body) {
-  const venue = await Venue.findOne({ code })
+  await storeModel.ensureStore()
+  const venue = await Venue.findOne({ ...storeModel.tenantFilter(), code })
   if (!venue) throw httpError(404, 'Venue not found')
 
   // Check if new code/name already exists
   if (body.code && body.code !== code) {
-    const existing = await Venue.findOne({ code: body.code })
+    const existing = await Venue.findOne({ ...storeModel.tenantFilter(), code: body.code })
     if (existing) throw httpError(409, 'Venue code already exists')
   }
 
   if (body.name) {
-    const existing = await Venue.findOne({ name: body.name, _id: { $ne: venue._id } })
+    const existing = await Venue.findOne({ ...storeModel.tenantFilter(), name: body.name, _id: { $ne: venue._id } })
     if (existing) throw httpError(409, 'Venue name already exists')
   }
 
@@ -143,7 +148,8 @@ async function updateVenue(code, body) {
  * Delete a venue
  */
 async function deleteVenue(code) {
-  const result = await Venue.deleteOne({ code })
+  await storeModel.ensureStore()
+  const result = await Venue.deleteOne({ ...storeModel.tenantFilter(), code })
   if (result.deletedCount === 0) throw httpError(404, 'Venue not found')
 
   // Clear cache

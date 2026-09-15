@@ -24,9 +24,10 @@ async function listStockMovements({ sku, type, search, page = 1, limit = 50 }) {
   }
   const skip = (pageNum - 1) * limitNum
 
+  const scopedQuery = storeModel.scopedQuery(query)
   const [rows, totalCount] = await Promise.all([
-    storeModel.StockMovement.find(query).sort({ date: -1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
-    storeModel.StockMovement.countDocuments(query)
+    storeModel.StockMovement.find(scopedQuery).sort({ date: -1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+    storeModel.StockMovement.countDocuments(scopedQuery)
   ])
 
   // Attach product names from inventory if available
@@ -78,6 +79,7 @@ async function adjustStock(body) {
 
   // Create the movement record
   const movement = await storeModel.StockMovement.create({
+    ...storeModel.withTenantFields({
     date: body.date || new Date().toISOString().slice(0, 10),
     sku: body.sku,
     type: body.type,
@@ -87,6 +89,7 @@ async function adjustStock(body) {
     reason: body.reason,
     reference: body.reference || '',
     user: body.user || 'System'
+    })
   })
 
   // Save the updated inventory
@@ -103,6 +106,7 @@ async function adjustStock(body) {
  */
 async function recordMovement(data) {
   return storeModel.StockMovement.create({
+    ...storeModel.withTenantFields({
     date: data.date || new Date().toISOString().slice(0, 10),
     sku: data.sku,
     type: data.type,
@@ -112,6 +116,7 @@ async function recordMovement(data) {
     reason: data.reason || '',
     reference: data.reference || '',
     user: data.user || 'System'
+    })
   })
 }
 

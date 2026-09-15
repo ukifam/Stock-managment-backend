@@ -2,6 +2,8 @@ const mongoose = require('mongoose')
 
 const settingSchema = new mongoose.Schema(
   {
+    ownerKey: { type: String, default: 'legacy', index: true },
+    ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
     profile: {
       displayName: { type: String, default: 'System Operator 01' },
       email: { type: String, default: 'operator@quantum-ai.nexus' },
@@ -29,5 +31,7 @@ const settingSchema = new mongoose.Schema(
   },
   { timestamps: true }
 )
+
+settingSchema.index({ ownerKey: 1 }, { unique: true })
 
 module.exports = mongoose.model('Setting', settingSchema)

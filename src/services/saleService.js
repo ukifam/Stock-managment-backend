@@ -332,7 +332,26 @@ module.exports = {
   bulkImportSales,
   updateSale,
   updateSaleStatus,
+  deleteSale,
 }
+
+async function deleteSale(id) {
+  const store = await storeModel.readStore()
+  const index = store.sales.findIndex((row) => row.id === id)
+  if (index === -1) throw httpError(404, 'Sale not found')
+
+  store.sales.splice(index, 1)
+  await storeModel.writeStore(store)
+  try {
+    const Sale = require('../models/Sale')
+    await Sale.deleteOne({ ...storeModel.tenantFilter(), id })
+  } catch (e) {
+    console.error('Error deleting sale from MongoDB:', e)
+  }
+  CacheManager.clear()
+  return { success: true, id }
+}
+
 
 function buildSaleRecord(body, store, index = 0) {
   const quantity = parseQuantity(body.quantity ?? body.items, 1)

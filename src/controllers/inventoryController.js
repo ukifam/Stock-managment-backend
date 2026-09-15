@@ -20,10 +20,15 @@ async function updateInventoryItem(req, res) {
   res.json(await inventoryService.updateInventoryItem(req.params.sku, req.body))
 }
 
+async function deleteInventoryItem(req, res) {
+  res.json(await inventoryService.deleteInventoryItem(req.params.sku))
+}
+
 module.exports = {
   listInventory,
   getInventoryItem,
   createInventoryItem,
   bulkImportInventory,
   updateInventoryItem,
+  deleteInventoryItem,
 }
