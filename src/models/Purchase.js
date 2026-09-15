@@ -26,6 +26,7 @@ const purchaseSchema = new mongoose.Schema(
     extractedText: { type: String, default: '' },
     quantity: { type: Number, default: 1 },
     unitPrice: { type: Number, default: 0 },
+    inventoryPrice: { type: Number, default: 0 },
     subtotal: { type: Number, default: 0 },
     discount: { type: Number, default: 0 },
     tax: { type: Number, default: 0 },

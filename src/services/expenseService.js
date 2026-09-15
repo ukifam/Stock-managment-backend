@@ -1,6 +1,7 @@
 const storeModel = require('../models/storeModel')
 const httpError = require('../utils/httpError')
 const CacheManager = require('../utils/cache')
+const mongoose = require('mongoose')
 
 async function listExpenses({ page = 1, limit = 50, search = '', category = '' }) {
   const pageNum = Math.max(1, parseInt(page, 10) || 1)
@@ -133,7 +134,11 @@ async function deleteExpense(id) {
   await storeModel.writeStore(store)
   try {
     const Expense = require('../models/Expense')
-    await Expense.deleteOne({ $or: [{ id }, { _id: id }] })
+    const selectors = [{ id }]
+    if (mongoose.isValidObjectId(id)) {
+      selectors.push({ _id: id })
+    }
+    await Expense.deleteOne(storeModel.scopedQuery({ $or: selectors }))
   } catch (e) {
     console.error('Error deleting expense from MongoDB:', e)
   }

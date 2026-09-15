@@ -24,7 +24,7 @@ function inventoryDto(row, currency) {
     rawStock: Number(row.stock || 0),
     rawCapacity: Number(row.capacity || 0),
     rawPrice: Number(row.price || 0),
-    stock: `${row.stock} / ${row.capacity}`,
+    stock: String(row.stock ?? 0),
     price: formatCurrency(row.price, currency),
   }
 }
@@ -45,10 +45,12 @@ function purchaseDto(row, currency) {
 
   const totalQuantity = rawItems.reduce((sum, it) => sum + Number(it.quantity || 0), 0)
   const computedSubtotal = rawItems.reduce((sum, it) => sum + Number(it.total || (it.quantity * it.unitPrice) || 0), 0)
-  const subtotal = Number(row.subtotal != null ? row.subtotal : computedSubtotal)
+  const storedSubtotal = Number(row.subtotal || 0)
+  const subtotal = storedSubtotal > 0 ? storedSubtotal : computedSubtotal
   const discount = Number(row.discount || 0)
   const tax = Number(row.tax || 0)
-  const total = Number(row.value != null ? row.value : (subtotal - discount + tax))
+  const storedTotal = Number(row.value || 0)
+  const total = storedTotal > 0 ? storedTotal : (subtotal - discount + tax)
   const paidAmount = Number(row.paidAmount ?? (String(row.payment || '').toLowerCase() === 'credit' ? 0 : total))
   const outstanding = Number(row.outstanding ?? Math.max(0, total - paidAmount))
 
@@ -71,6 +73,7 @@ function purchaseDto(row, currency) {
     item: row.item || (lineItems.length === 1 ? lineItems[0].item : `${lineItems.length} items`),
     rawQuantity: totalQuantity,
     rawUnitPrice: lineItems[0]?.unitPrice || 0,
+    rawInventoryPrice: Number(row.inventoryPrice ?? lineItems[0]?.unitPrice ?? 0),
     rawSubtotal: subtotal,
     rawDiscount: discount,
     rawTax: tax,

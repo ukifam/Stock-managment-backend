@@ -144,6 +144,7 @@ async function updatePurchase(id, body) {
   const previousPurchase = store.purchases[index]
   const quantity = parseQuantity(body.quantity, previousPurchase.quantity)
   const unitPrice = parseMoney(body.unitPrice ?? body.price, previousPurchase.unitPrice)
+  const inventoryPrice = parseMoney(body.inventoryPrice, previousPurchase.inventoryPrice ?? unitPrice)
   const total = quantity * unitPrice
   const payment = body.payment || previousPurchase.payment || 'Cash'
   const paidAmount = resolvePaidAmount(body, total, payment, previousPurchase.paidAmount)
@@ -160,6 +161,7 @@ async function updatePurchase(id, body) {
     extractedText: body.extractedText ?? previousPurchase.extractedText ?? '',
     quantity,
     unitPrice,
+    inventoryPrice,
     payment,
     paidAmount,
     outstanding,
@@ -225,6 +227,7 @@ async function deletePurchase(id) {
 function buildPurchaseRecord(body, store, index = 0) {
   const quantity = parseQuantity(body.quantity, 1)
   const unitPrice = parseMoney(body.unitPrice ?? body.price, 0)
+  const inventoryPrice = parseMoney(body.inventoryPrice ?? body.inventoryprice, unitPrice)
   const total = quantity * unitPrice
   const payment = body.payment || 'Cash'
   const paidAmount = resolvePaidAmount(body, total, payment)
@@ -247,6 +250,7 @@ function buildPurchaseRecord(body, store, index = 0) {
     extractedText: body.extractedText || '',
     quantity,
     unitPrice,
+    inventoryPrice,
     payment,
     paidAmount,
     outstanding,
@@ -268,7 +272,7 @@ function applyPurchaseToInventory(store, purchase) {
   if (existing) {
     existing.stock = Number(existing.stock || 0) + Number(purchase.quantity || 0)
     existing.capacity = Math.max(Number(existing.capacity || 0), Number(existing.stock || 0))
-    existing.price = Number(purchase.unitPrice || existing.price || 0)
+    existing.price = Number(purchase.inventoryPrice ?? purchase.unitPrice ?? existing.price ?? 0)
     existing.status = inventoryStatus(existing.stock)
     existing.extractedText = purchase.extractedText || existing.extractedText || ''
     return
@@ -282,7 +286,7 @@ function applyPurchaseToInventory(store, purchase) {
     category: purchase.category || 'Uncategorized',
     stock: Number(purchase.quantity || 0),
     capacity: Math.max(Number(purchase.quantity || 0), 25),
-    price: Number(purchase.unitPrice || 0),
+    price: Number(purchase.inventoryPrice ?? purchase.unitPrice ?? 0),
     status: inventoryStatus(purchase.quantity),
     serial: '',
     supplier: purchase.supplier,
