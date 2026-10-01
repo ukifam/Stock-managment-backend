@@ -10,17 +10,24 @@ function normalizeEmail(email = '') {
 }
 
 function ownerKeyForUser(user) {
+  const explicitOwnerKey = String(user?.ownerKey || '').trim()
+  if (explicitOwnerKey) return explicitOwnerKey
   const email = normalizeEmail(user?.email)
   if (!email || email === LEGACY_OWNER_EMAIL) return LEGACY_OWNER_KEY
   return email
 }
 
 function ownerEmailForUser(user) {
+  const explicitOwnerEmail = normalizeEmail(user?.ownerEmail)
+  if (explicitOwnerEmail) return explicitOwnerEmail
   const email = normalizeEmail(user?.email)
   return email || LEGACY_OWNER_EMAIL
 }
 
 function tenantForUser(user) {
+  if (String(user?.role || '').toLowerCase() === 'system_admin' && !user?.ownerKey) {
+    return { ownerKey: null, ownerEmail: normalizeEmail(user?.email) }
+  }
   return {
     ownerKey: ownerKeyForUser(user),
     ownerEmail: ownerEmailForUser(user),
@@ -37,6 +44,7 @@ function currentTenant() {
 
 function tenantFilter() {
   const { ownerKey } = currentTenant()
+  if (!ownerKey) throw new Error('A shop must be selected before accessing shop data')
   if (ownerKey === LEGACY_OWNER_KEY) {
     return {
       $or: [

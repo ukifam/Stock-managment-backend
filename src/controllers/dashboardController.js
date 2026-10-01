@@ -1,7 +1,8 @@
 const dashboardService = require('../services/dashboardService')
 
-async function getDashboard(_req, res) {
-  res.json(await dashboardService.getDashboard())
+async function getDashboard(req, res) {
+  const { from, to, category, stockStatus } = req.query
+  res.json(await dashboardService.getDashboard({ from, to, category, stockStatus }))
 }
 
 module.exports = {

@@ -53,7 +53,7 @@ async function listSales({ period = 'yearly', search = '', page = 1, limit = 50,
   return result
 }
 
-async function createSale(body) {
+async function createSale(body, options = {}) {
   if (!body.customer) {
     throw httpError(400, 'Customer name is required')
   }
@@ -68,6 +68,7 @@ async function createSale(body) {
       quantity: Math.max(1, parseInt(it.quantity, 10) || 1),
       unitPrice: Math.max(0, parseFloat(it.unitPrice) || 0),
       total: Math.max(0, (parseInt(it.quantity, 10) || 1) * (parseFloat(it.unitPrice) || 0)),
+      ...(it.costBasis !== undefined ? { costBasis: Math.max(0, Number(it.costBasis) || 0) } : {}),
     }))
   } else if (body.item) {
     const qty = Math.max(1, parseInt(body.quantity, 10) || 1)
@@ -92,24 +93,34 @@ async function createSale(body) {
   // Verify stock availability for ALL items before deducting anything
   const inventoryItemsToUpdate = []
   for (const sItem of saleItems) {
-    const invItem = findInventoryItem(store.inventory, sItem)
+    let invItem = findInventoryItem(store.inventory, sItem)
+    if (!invItem && options.allowExternalItem) {
+      invItem = {
+        sku: sItem.sku || '',
+        item: sItem.item,
+        category: sItem.category,
+        stock: 0,
+      }
+    }
     if (!invItem) {
       throw httpError(404, `Product not found in inventory: ${sItem.item || sItem.sku}`)
     }
     const currentStock = Number(invItem.stock || 0)
-    if (sItem.quantity > currentStock) {
+    if (!options.stockAlreadyDeducted && sItem.quantity > currentStock) {
       throw httpError(400, `Insufficient stock for ${invItem.item} (SKU: ${invItem.sku}). Requested: ${sItem.quantity}, Available: ${currentStock}`)
     }
     sItem.sku = invItem.sku
     sItem.item = invItem.item
     sItem.category = invItem.category || sItem.category
+    if (options.partnerUnitCost !== undefined) sItem.costBasis = Number(options.partnerUnitCost)
     inventoryItemsToUpdate.push({ invItem, saleItem: sItem, prevStock: currentStock })
   }
 
-  // Deduct stock
-  for (const { invItem, saleItem, prevStock } of inventoryItemsToUpdate) {
-    invItem.stock = prevStock - saleItem.quantity
-    invItem.status = inventoryStatus(invItem.stock)
+  if (!options.stockAlreadyDeducted) {
+    for (const { invItem, saleItem, prevStock } of inventoryItemsToUpdate) {
+      invItem.stock = prevStock - saleItem.quantity
+      invItem.status = inventoryStatus(invItem.stock)
+    }
   }
 
   const subtotal = saleItems.reduce((sum, it) => sum + it.total, 0)
@@ -133,6 +144,7 @@ async function createSale(body) {
   const sale = {
     date,
     id,
+    reference: String(body.reference || '').trim(),
     customer: body.customer,
     phone: body.phone || body.contact || '',
     item: summaryItemText,
@@ -154,19 +166,37 @@ async function createSale(body) {
   store.sales.unshift(sale)
   await storeModel.writeStore(store)
 
-  // Record individual stock movements for each item in the sale
-  for (const { invItem, saleItem, prevStock } of inventoryItemsToUpdate) {
-    await stockMovementService.recordMovement({
-      date,
-      sku: invItem.sku,
-      type: 'SALE',
-      quantity: -saleItem.quantity,
-      previousStock: prevStock,
-      newStock: invItem.stock,
-      reason: `Sale ${id} to ${body.customer}: ${saleItem.quantity}x ${saleItem.item}`,
-      reference: id,
-      user: body.user || 'Cashier',
-    })
+  if (options.stockAlreadyDeducted && options.showcase) {
+    for (const { invItem, saleItem } of inventoryItemsToUpdate) {
+      await stockMovementService.recordMovement({
+        date,
+        sku: invItem.sku,
+        type: 'SHOWCASE_SALE',
+        quantity: 0,
+        previousStock: invItem.stock,
+        newStock: invItem.stock,
+        reason: `Showcase ${options.showcase.reference} sold ${saleItem.quantity}x ${saleItem.item} to ${body.customer}; sale ${id}`,
+        reference: options.showcase.reference,
+        partner: body.customer,
+        showcaseQuantity: saleItem.quantity,
+        user: body.user || 'Showcase Closeout',
+      })
+    }
+  } else if (!options.stockAlreadyDeducted) {
+    // Record individual stock movements for each sale item.
+    for (const { invItem, saleItem, prevStock } of inventoryItemsToUpdate) {
+      await stockMovementService.recordMovement({
+        date,
+        sku: invItem.sku,
+        type: 'SALE',
+        quantity: -saleItem.quantity,
+        previousStock: prevStock,
+        newStock: invItem.stock,
+        reason: `Sale ${id} to ${body.customer}: ${saleItem.quantity}x ${saleItem.item}`,
+        reference: id,
+        user: body.user || 'Cashier',
+      })
+    }
   }
 
   CacheManager.clear()

@@ -140,6 +140,9 @@ function buildPurchaseLots(purchases = []) {
 
 function calculateSaleCost(sale, purchaseLots, purchaseCostIndex, inventory = []) {
   const saleQuantity = Number(sale.quantity || 1)
+  if (Array.isArray(sale.items) && sale.items.length && sale.items.every((item) => Number.isFinite(Number(item.costBasis)))) {
+    return sale.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.costBasis), 0)
+  }
   const saleDate = parseDateValue(sale.date)
   let remainingQuantity = saleQuantity
   let totalCost = 0

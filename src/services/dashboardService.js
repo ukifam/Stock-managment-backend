@@ -7,29 +7,34 @@ const CacheManager = require('../utils/cache')
  * Get dashboard with caching for improved performance
  * Dashboard data is cached for 30 seconds
  */
-async function getDashboard() {
+async function getDashboard(filters = {}) {
   // Check cache first - dashboard rarely changes
-  const cacheKey = 'dashboard:main'
+  const { from, to, category = '', stockStatus = 'all' } = filters
+  const cacheKey = `dashboard:${from || ''}:${to || ''}:${category}:${stockStatus}`
   const cached = CacheManager.get(cacheKey)
   if (cached) {
     return cached
   }
 
   const store = await storeModel.readStore()
-  const summary = totals(store)
-  const todaySales = salesForDate(store.sales, new Date())
+  const sales = store.sales.filter((sale) => isWithinDateRange(sale.date, from, to))
+  const purchases = store.purchases.filter((purchase) => isWithinDateRange(purchase.date, from, to))
+  const inventory = filterInventory(store.inventory, store.settings, category, stockStatus)
+  const summary = totals(store, sales, purchases, inventory)
   const currency = currencyFromSettings(store.settings)
 
   const result = {
+    categories: [...new Set(store.inventory.map((item) => item.category).filter(Boolean))].sort(),
     metrics: [
       { label: 'Total Products', value: summary.totalProducts.toLocaleString('en-US'), delta: `${summary.lowStockCount} low stock` },
-      { label: 'Total Sales', value: formatCurrency(summary.totalSales, currency), delta: `${store.sales.length} orders` },
-      { label: 'Total Purchases', value: formatCurrency(summary.totalPurchases, currency), delta: `${store.purchases.length} orders` },
+      { label: 'Total Sales', value: formatCurrency(summary.totalSales, currency), delta: `${sales.length} orders` },
+      { label: 'Total Purchases', value: formatCurrency(summary.totalPurchases, currency), delta: `${purchases.length} orders` },
       { label: 'Available Stock', value: `${summary.availableStock.toFixed(1)}%`, delta: `${summary.stockAvailable} units` },
     ],
-    salesBars: hourlyBars(todaySales),
-    lowStock: lowStockAlerts(store),
-    catalog: catalogItems(store),
+    salesBars: rangeBars(sales, from, to),
+    salesLabels: rangeLabels(sales, from, to),
+    lowStock: lowStockAlerts({ ...store, inventory }),
+    catalog: catalogItems({ ...store, inventory }),
   }
 
   // Cache for 30 seconds (shorter TTL since dashboard updates frequently)
@@ -37,18 +42,18 @@ async function getDashboard() {
   return result
 }
 
-function totals(store) {
-  const stockCapacity = store.inventory.reduce((sum, item) => sum + Number(item.capacity || 0), 0)
-  const stockAvailable = store.inventory.reduce((sum, item) => sum + Number(item.stock || 0), 0)
-  const salesValue = store.sales.reduce((sum, sale) => sum + Number(sale.value || 0), 0)
-  const purchaseValue = store.purchases.reduce(
+function totals(store, sales, purchases, inventory) {
+  const stockCapacity = inventory.reduce((sum, item) => sum + Number(item.capacity || 0), 0)
+  const stockAvailable = inventory.reduce((sum, item) => sum + Number(item.stock || 0), 0)
+  const salesValue = sales.reduce((sum, sale) => sum + Number(sale.value || 0), 0)
+  const purchaseValue = purchases.reduce(
     (sum, purchase) => sum + Number(purchase.quantity || 0) * Number(purchase.unitPrice || 0),
     0,
   )
-  const lowStockCount = store.inventory.filter((item) => Number(item.stock || 0) <= Number(store.settings.inventory.lowStockThreshold || 25)).length
+  const lowStockCount = inventory.filter((item) => Number(item.stock || 0) <= Number(store.settings.inventory.lowStockThreshold || 25)).length
 
   return {
-    totalProducts: store.inventory.length,
+    totalProducts: inventory.length,
     totalSales: salesValue,
     totalPurchases: purchaseValue,
     availableStock: stockCapacity ? (stockAvailable / stockCapacity) * 100 : 0,
@@ -70,6 +75,18 @@ function lowStockAlerts(store) {
     }))
 }
 
+function filterInventory(inventory, settings, category, stockStatus) {
+  const threshold = Number(settings.inventory.lowStockThreshold || 25)
+  return inventory.filter((item) => {
+    if (category && item.category !== category) return false
+    const stock = Number(item.stock || 0)
+    if (stockStatus === 'out' && stock !== 0) return false
+    if (stockStatus === 'low' && (stock === 0 || stock > threshold)) return false
+    if (stockStatus === 'available' && stock <= threshold) return false
+    return true
+  })
+}
+
 function catalogItems(store) {
   return [...store.inventory]
     .sort((a, b) => new Date(`${b.date}T12:00:00`) - new Date(`${a.date}T12:00:00`))
@@ -83,22 +100,46 @@ function catalogItems(store) {
   }))
 }
 
-function salesForDate(sales, date) {
-  return sales.filter((sale) => {
-    const saleDate = new Date(`${sale.date}T12:00:00`)
-    return saleDate.getFullYear() === date.getFullYear()
-      && saleDate.getMonth() === date.getMonth()
-      && saleDate.getDate() === date.getDate()
-  })
+function isWithinDateRange(value, from, to) {
+  const date = new Date(`${String(value || '').slice(0, 10)}T12:00:00`)
+  if (Number.isNaN(date.getTime())) return false
+  if (from && date < new Date(`${from}T00:00:00`)) return false
+  if (to && date > new Date(`${to}T23:59:59.999`)) return false
+  return true
 }
 
-function hourlyBars(sales) {
+function rangeBars(sales, from, to) {
   const buckets = Array.from({ length: 12 }, () => 0)
-  sales.forEach((sale, index) => {
-    buckets[index % buckets.length] += Number(sale.value || 0)
+  const { start, end } = chartRange(sales, from, to)
+  const duration = Math.max(end.getTime() - start.getTime(), 1)
+  sales.forEach((sale) => {
+    const date = new Date(`${String(sale.date || '').slice(0, 10)}T12:00:00`)
+    const bucket = Math.min(11, Math.max(0, Math.floor(((date.getTime() - start.getTime()) / duration) * 12)))
+    buckets[bucket] += Number(sale.value || 0)
   })
 
   return scaleBars(buckets)
+}
+
+function rangeLabels(sales, from, to) {
+  const { start, end } = chartRange(sales, from, to)
+  const duration = Math.max(end.getTime() - start.getTime(), 1)
+  return Array.from({ length: 6 }, (_, index) => {
+    const date = new Date(start.getTime() + (duration * index * 2) / 12)
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  })
+}
+
+function chartRange(sales, from, to) {
+  const dates = sales.map((sale) => new Date(`${String(sale.date || '').slice(0, 10)}T12:00:00`))
+    .filter((date) => !Number.isNaN(date.getTime()))
+  const end = to ? new Date(`${to}T12:00:00`) : dates.length ? new Date(Math.max(...dates)) : new Date()
+  const start = from
+    ? new Date(`${from}T12:00:00`)
+    : dates.length
+      ? new Date(Math.min(...dates))
+      : new Date(end.getFullYear() - 1, end.getMonth(), end.getDate())
+  return { start, end }
 }
 
 function scaleBars(values) {

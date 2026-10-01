@@ -8,6 +8,7 @@ const saleItemSchema = new mongoose.Schema(
     quantity: { type: Number, required: true, default: 1 },
     unitPrice: { type: Number, required: true, default: 0 },
     total: { type: Number, required: true, default: 0 },
+    costBasis: { type: Number, min: 0 },
   },
   { _id: false }
 )
@@ -18,6 +19,7 @@ const saleSchema = new mongoose.Schema(
     ownerKey: { type: String, default: 'legacy', index: true },
     ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
     id: { type: String, required: true, trim: true },
+    reference: { type: String, default: '' },
     customer: { type: String, required: true, index: true },
     phone: { type: String, default: '' },
     item: { type: String, default: '' },

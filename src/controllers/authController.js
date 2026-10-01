@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken')
 const User = require('../models/User')
 const httpError = require('../utils/httpError')
 const { JWT_SECRET } = require('../middleware/authMiddleware')
+const { normalizeRole } = require('../utils/roles')
 
 async function register(req, res, next) {
   try {
@@ -23,10 +24,13 @@ async function register(req, res, next) {
       email: normalizedEmail,
       password: hashedPassword,
       role: 'admin',
+      ownerKey: normalizedEmail,
+      ownerEmail: normalizedEmail,
+      active: true,
     })
 
     const token = jwt.sign(
-      { id: user._id.toString(), email: user.email, username: user.username, role: user.role },
+      { id: user._id.toString(), email: user.email, username: user.username, role: normalizeRole(user.role), ownerKey: user.ownerKey, ownerEmail: user.ownerEmail },
       JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -37,7 +41,8 @@ async function register(req, res, next) {
         id: user._id.toString(),
         username: user.username,
         email: user.email,
-        role: user.role,
+        role: normalizeRole(user.role),
+        ownerKey: user.ownerKey,
       },
     })
   } catch (error) {
@@ -58,13 +63,15 @@ async function login(req, res, next) {
       throw httpError(401, 'Invalid email or password')
     }
 
+    if (user.active === false) throw httpError(403, 'This account is disabled')
+
     const isMatch = await bcrypt.compare(password, user.password)
     if (!isMatch) {
       throw httpError(401, 'Invalid email or password')
     }
 
     const token = jwt.sign(
-      { id: user._id.toString(), email: user.email, username: user.username, role: user.role },
+      { id: user._id.toString(), email: user.email, username: user.username, role: normalizeRole(user.role), ownerKey: user.ownerKey, ownerEmail: user.ownerEmail },
       JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -75,7 +82,8 @@ async function login(req, res, next) {
         id: user._id.toString(),
         username: user.username,
         email: user.email,
-        role: user.role,
+        role: normalizeRole(user.role),
+        ownerKey: user.ownerKey,
       },
     })
   } catch (error) {
@@ -94,7 +102,8 @@ async function me(req, res, next) {
       id: user._id.toString(),
       username: user.username,
       email: user.email,
-      role: user.role,
+      role: normalizeRole(user.role),
+      ownerKey: user.ownerKey,
     })
   } catch (error) {
     next(error)

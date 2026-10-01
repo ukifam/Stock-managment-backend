@@ -13,6 +13,8 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
   const expenses = selectRows(store.expenses, period, from, to)
   const currency = currencyFromSettings(store.settings)
 
+  const reportSales = credit === 'salesCredit' ? sales.filter(isCreditSale) : sales
+  const reportPurchases = credit === 'purchasesCredit' ? purchases.filter(isCreditPurchase) : purchases
   const revenue = sales.reduce((sum, sale) => sum + Number(sale.value || 0), 0)
   const purchaseCost = purchases.reduce((sum, purchase) => sum + Number(purchase.quantity * purchase.unitPrice || 0), 0)
   const purchaseCostIndex = buildAverageUnitCostIndex(purchases, store.inventory)
@@ -27,9 +29,7 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
   const totalTransactions = sales.length + purchases.length + expenses.length
   const completedTransactions = [...sales, ...purchases].filter((row) => ['Given', 'Received', 'Completed', 'Confirmed'].includes(String(row.status || ''))).length
 
-  const paymentMethods = summarizePaymentMethods(sales, currency)
-  const reportSales = credit === 'salesCredit' ? sales.filter(isCreditSale) : sales
-  const reportPurchases = credit === 'purchasesCredit' ? purchases.filter(isCreditPurchase) : purchases
+  const paymentMethods = summarizePaymentMethods(reportSales, currency)
   const creditSummary = summarizeCreditTotals(sales, purchases, currency)
   const detailPurchases = buildDetailList(reportPurchases, 'Purchase', purchaseTransaction, currency)
   const detailSales = buildDetailList(reportSales, 'Sale', (row, currencyValue, typeValue) => saleTransaction(row, currencyValue, typeValue, purchases, purchaseCostIndex, store.inventory), currency)
@@ -90,8 +90,8 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
       estimatedLoss: formatCurrency(Math.abs(d.quantity) * (inventoryPriceMap.get(d.sku) || 0), currency)
     })),
     summary: {
-      salesCount: reportSales.length,
-      purchasesCount: reportPurchases.length,
+      salesCount: sales.length,
+      purchasesCount: purchases.length,
       expensesCount: expenses.length,
       totalTransactions: sales.length + purchases.length + expenses.length,
       totalSales: formatCurrency(revenue, currency),
@@ -104,8 +104,10 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
       netCashFlow: formatCurrency(netProfit, currency),
       purchasesCash: creditSummary.purchasesCash,
       purchasesOnCredit: creditSummary.purchasesOnCredit,
+      totalPurchasesOnCredit: creditSummary.totalPurchasesOnCredit,
       salesCash: creditSummary.salesCash,
       salesOnCredit: creditSummary.salesOnCredit,
+      totalSalesOnCredit: creditSummary.totalSalesOnCredit,
       totalPayments: formatCurrency(purchaseCost + expenseTotal, currency),
       totalStockUnits,
       totalInventoryValuation: formatCurrency(totalInventoryValuation, currency),
@@ -217,8 +219,10 @@ function expenseTransaction(row, currency) {
 function summarizeCreditTotals(sales, purchases, currency) {
   let purchasesCash = 0
   let purchasesOnCredit = 0
+  let totalPurchasesOnCredit = 0
   let salesCash = 0
   let salesOnCredit = 0
+  let totalSalesOnCredit = 0
   let totalPayments = 0
 
   purchases.forEach((purchase) => {
@@ -227,6 +231,7 @@ function summarizeCreditTotals(sales, purchases, currency) {
     const outstanding = getOutstanding(purchase, total, paidAmount)
     totalPayments += paidAmount
     if (isCreditPurchase(purchase)) {
+      totalPurchasesOnCredit += total
       purchasesOnCredit += outstanding
       purchasesCash += paidAmount
     } else {
@@ -240,6 +245,7 @@ function summarizeCreditTotals(sales, purchases, currency) {
     const outstanding = getOutstanding(sale, total, paidAmount)
     totalPayments += paidAmount
     if (isCreditSale(sale)) {
+      totalSalesOnCredit += total
       salesOnCredit += outstanding
       salesCash += paidAmount
     } else {
@@ -250,8 +256,10 @@ function summarizeCreditTotals(sales, purchases, currency) {
   return {
     purchasesCash: formatCurrency(purchasesCash, currency),
     purchasesOnCredit: formatCurrency(purchasesOnCredit, currency),
+    totalPurchasesOnCredit: formatCurrency(totalPurchasesOnCredit, currency),
     salesCash: formatCurrency(salesCash, currency),
     salesOnCredit: formatCurrency(salesOnCredit, currency),
+    totalSalesOnCredit: formatCurrency(totalSalesOnCredit, currency),
     totalPayments: formatCurrency(totalPayments, currency),
   }
 }

@@ -22,7 +22,10 @@ const stockMovementSchema = new mongoose.Schema(
         'CORRECTION',
         'OPENING_STOCK', 
         'TRANSFER_IN', 
-        'TRANSFER_OUT'
+        'TRANSFER_OUT',
+        'SHOWCASE_OUT',
+        'SHOWCASE_RETURN',
+        'SHOWCASE_SALE'
       ],
       index: true 
     },
@@ -31,6 +34,9 @@ const stockMovementSchema = new mongoose.Schema(
     newStock: { type: Number, required: true },
     reason: { type: String, default: '' },
     reference: { type: String, default: '' },
+    partner: { type: String, default: '' },
+    showcaseQuantity: { type: Number, default: 0 },
+    expectedReturnDate: { type: String, default: '' },
     user: { type: String, default: 'System' }
   },
   { timestamps: true }
