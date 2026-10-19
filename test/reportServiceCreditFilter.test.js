@@ -20,7 +20,7 @@ require.cache[storeModelPath] = {
   id: storeModelPath,
   filename: storeModelPath,
   loaded: true,
-  exports: { readStore: async () => store },
+  exports: { readStore: async () => store, branchScopedQuery: () => ({}) },
 }
 
 const { getReports } = require('../src/services/reportService')

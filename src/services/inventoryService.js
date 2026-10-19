@@ -7,6 +7,7 @@ const { parseMoney, parseQuantity } = require('../utils/parsers')
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
 const stockMovementService = require('./stockMovementService')
+const { assertUnitExists, normalizeUnitCode } = require('./unitConversionService')
 
 /**
  * List inventory with pagination, filtering, and caching
@@ -89,6 +90,7 @@ async function createInventoryItem(body) {
   const missing = required(body, ['item', 'category'])
   if (missing.length) throw httpError(400, 'Missing required fields', { fields: missing })
 
+  if (body.baseUnit !== undefined) await assertUnitExists(body.baseUnit)
   const store = await storeModel.readStore()
   const item = buildInventoryRecord(body, store, 0)
   store.inventory.unshift(item)
@@ -102,6 +104,11 @@ async function createInventoryItem(body) {
     previousStock: 0,
     newStock: item.stock,
     reason: 'Initial setup',
+    originalQuantity: item.stock,
+    originalUnit: item.baseUnit,
+    convertedQuantity: item.stock,
+    convertedUnit: item.baseUnit,
+    warehouseCode: item.defaultWarehouseCode,
   })
 
   CacheManager.clear()
@@ -156,6 +163,7 @@ async function bulkImportInventory(bodies) {
 }
 
 async function updateInventoryItem(sku, body) {
+  if (body.baseUnit !== undefined) await assertUnitExists(body.baseUnit)
   const store = await storeModel.readStore()
   const index = store.inventory.findIndex((row) => row.sku === sku)
   if (index === -1) throw httpError(404, 'Inventory item not found')
@@ -165,6 +173,7 @@ async function updateInventoryItem(sku, body) {
     ...body,
     capacity: body.capacity !== undefined ? parseQuantity(body.capacity, store.inventory[index].capacity) : store.inventory[index].capacity,
     price: body.price !== undefined ? parseMoney(body.price, store.inventory[index].price) : store.inventory[index].price,
+    baseUnit: body.baseUnit !== undefined ? normalizeUnitCode(body.baseUnit) : store.inventory[index].baseUnit,
   }
 
   await storeModel.writeStore(store)
@@ -203,7 +212,7 @@ async function deleteInventoryItem(sku) {
   await storeModel.writeStore(store)
   try {
     const Inventory = require('../models/Inventory')
-    await Inventory.deleteOne({ ...storeModel.tenantFilter(), sku })
+    await Inventory.deleteOne(storeModel.branchScopedQuery({ sku }))
   } catch (e) {
     console.error('Error deleting inventory from MongoDB:', e)
   }
@@ -214,9 +223,12 @@ async function deleteInventoryItem(sku) {
 
 function buildInventoryRecord(body, store, index = 0) {
   const requestedSku = String(body.sku || body.barcode || '').trim()
+  if (requestedSku && store.inventory.some((row) => row.sku === requestedSku)) {
+    throw httpError(409, `Item code ${requestedSku} already exists`)
+  }
   let sku = requestedSku || `SKU-IMP-${Date.now()}-${index}`
 
-  while (store.inventory.some((row) => row.sku === sku)) {
+  while (!requestedSku && store.inventory.some((row) => row.sku === sku)) {
     sku = `SKU-IMP-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`
   }
 
@@ -225,12 +237,27 @@ function buildInventoryRecord(body, store, index = 0) {
   return {
     date: body.date || new Date().toISOString().slice(0, 10),
     item: body.item,
+    description: body.description || '',
     meta: body.meta || body.brand || 'Imported inventory',
     sku,
     category: body.category,
+    itemType: body.itemType || 'raw_material',
+    baseUnit: normalizeUnitCode(body.baseUnit || 'piece'),
     stock,
     capacity: parseQuantity(body.capacity ?? body.maxstock, Math.max(stock, 25)),
+    minimumStock: parseQuantity(body.minimumStock ?? body.minstock, 0),
+    maximumStock: parseQuantity(body.maximumStock ?? body.capacity ?? body.maxstock, Math.max(stock, 25)),
+    reorderLevel: parseQuantity(body.reorderLevel ?? body.reorderlevel, 0),
     price: parseMoney(body.price ?? body.unitprice ?? body.unitPrice, 0),
+    purchasePrice: parseMoney(body.purchasePrice ?? body.purchaseprice ?? body.inventoryPrice, parseMoney(body.price ?? body.unitprice ?? body.unitPrice, 0)),
+    sellingPrice: parseMoney(body.sellingPrice ?? body.sellingprice ?? body.price ?? body.unitprice ?? body.unitPrice, 0),
+    defaultSupplierId: body.defaultSupplierId || '',
+    supplierOptions: Array.isArray(body.supplierOptions) ? body.supplierOptions : [],
+    priceTiers: Array.isArray(body.priceTiers) ? body.priceTiers : [],
+    defaultWarehouseCode: String(body.defaultWarehouseCode || body.warehouseCode || '').trim().toUpperCase(),
+    batchTracking: Boolean(body.batchTracking),
+    expiryTracking: Boolean(body.expiryTracking),
+    serialTracking: Boolean(body.serialTracking),
     status: body.status || (stock <= 0 ? 'Out of Stock' : 'Active'),
     serial: body.serial || body.serialnumber || body.serialNumber || '',
     supplier: body.supplier || body.vendor || '',

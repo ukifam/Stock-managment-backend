@@ -5,6 +5,9 @@ const stockMovementSchema = new mongoose.Schema(
     date: { type: String, required: true, index: true },
     ownerKey: { type: String, default: 'legacy', index: true },
     ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
+    branchCode: { type: String, default: 'MAIN', trim: true, uppercase: true, index: true },
+    createdBy: { id: String, username: String, email: String },
+    updatedBy: { id: String, username: String, email: String },
     sku: { type: String, required: true, index: true },
     type: { 
       type: String, 
@@ -25,11 +28,28 @@ const stockMovementSchema = new mongoose.Schema(
         'TRANSFER_OUT',
         'SHOWCASE_OUT',
         'SHOWCASE_RETURN',
-        'SHOWCASE_SALE'
+        'SHOWCASE_SALE',
+        'PRODUCTION_CONSUMPTION',
+        'PRODUCTION_OUTPUT',
+        'WASTE',
+        'EXPIRY',
+        'QUARANTINE',
+        'RESERVATION',
+        'INCOMING'
       ],
       index: true 
     },
     quantity: { type: Number, required: true },
+    originalQuantity: { type: Number, default: 0 },
+    originalUnit: { type: String, default: '', trim: true, lowercase: true },
+    convertedQuantity: { type: Number, default: 0 },
+    convertedUnit: { type: String, default: '', trim: true, lowercase: true },
+    warehouseCode: { type: String, default: '', trim: true, uppercase: true, index: true },
+    fromWarehouseCode: { type: String, default: '', trim: true, uppercase: true },
+    toWarehouseCode: { type: String, default: '', trim: true, uppercase: true },
+    batchNumber: { type: String, default: '' },
+    expiryDate: { type: String, default: '' },
+    serialNumber: { type: String, default: '' },
     previousStock: { type: Number, required: true },
     newStock: { type: Number, required: true },
     reason: { type: String, default: '' },
@@ -43,6 +63,6 @@ const stockMovementSchema = new mongoose.Schema(
 )
 
 // Index for getting movements for a specific item ordered by date
-stockMovementSchema.index({ ownerKey: 1, sku: 1, createdAt: -1 });
+stockMovementSchema.index({ ownerKey: 1, branchCode: 1, sku: 1, createdAt: -1 });
 
 module.exports = mongoose.model('StockMovement', stockMovementSchema)

@@ -20,6 +20,7 @@ require.cache[storeModelPath] = {
   loaded: true,
   exports: {
     readStore: async () => store,
+    branchScopedQuery: () => ({}),
     StockMovement: { find: () => ({ lean: async () => movements }) },
   },
 }

@@ -2,7 +2,7 @@ const mongoose = require('mongoose')
 
 const settingSchema = new mongoose.Schema(
   {
-    ownerKey: { type: String, default: 'legacy', index: true },
+    ownerKey: { type: String, default: 'legacy' },
     ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
     profile: {
       displayName: { type: String, default: 'System Operator 01' },

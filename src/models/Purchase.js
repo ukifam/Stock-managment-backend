@@ -17,6 +17,9 @@ const purchaseSchema = new mongoose.Schema(
     date: { type: String, required: true, index: true },
     ownerKey: { type: String, default: 'legacy', index: true },
     ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
+    branchCode: { type: String, default: 'MAIN', trim: true, uppercase: true, index: true },
+    createdBy: { id: String, username: String, email: String },
+    updatedBy: { id: String, username: String, email: String },
     id: { type: String, required: true, trim: true },
     supplier: { type: String, default: '', index: true },
     phone: { type: String, default: '' },
@@ -25,6 +28,15 @@ const purchaseSchema = new mongoose.Schema(
     category: { type: String, default: 'Uncategorized', index: true },
     extractedText: { type: String, default: '' },
     quantity: { type: Number, default: 1 },
+    originalQuantity: { type: Number, default: 0 },
+    originalUnit: { type: String, default: '', trim: true, lowercase: true },
+    convertedQuantity: { type: Number, default: 0 },
+    convertedUnit: { type: String, default: '', trim: true, lowercase: true },
+    warehouseCode: { type: String, default: '', trim: true, uppercase: true },
+    supplierId: { type: String, default: '' },
+    batchNumber: { type: String, default: '' },
+    expiryDate: { type: String, default: '' },
+    serialNumber: { type: String, default: '' },
     unitPrice: { type: Number, default: 0 },
     inventoryPrice: { type: Number, default: 0 },
     subtotal: { type: Number, default: 0 },
@@ -42,6 +54,6 @@ const purchaseSchema = new mongoose.Schema(
 
 // Compound index for common queries
 purchaseSchema.index({ date: -1, status: 1 })
-purchaseSchema.index({ ownerKey: 1, id: 1 }, { unique: true })
+purchaseSchema.index({ ownerKey: 1, branchCode: 1, id: 1 }, { unique: true })
 
 module.exports = mongoose.model('Purchase', purchaseSchema)

@@ -6,6 +6,7 @@ const Purchase = require('../models/Purchase')
 const Sale = require('../models/Sale')
 const Expense = require('../models/Expense')
 const Loan = require('../models/Loan')
+const Business = require('../models/Business')
 const Setting = require('../models/Setting')
 const PartnerTransfer = require('../models/PartnerTransfer')
 const storeModel = require('../models/storeModel')
@@ -14,12 +15,15 @@ const { formatCurrency } = require('../utils/formatters')
 const httpError = require('../utils/httpError')
 const { isSystemAdmin, normalizeRole } = require('../utils/roles')
 const { ownerKeyForUser } = require('../utils/tenantContext')
+const { BUSINESS_TEMPLATES } = require('./businessService')
+const { businessFeatures } = require('../utils/businessFeatures')
 
 async function getAdminOverview() {
   const today = new Date().toISOString().slice(0, 10)
   const isDbConnected = mongoose.connection.readyState === 1
 
   let users = []
+  let businesses = []
   let inventory = []
   let sales = []
   let purchases = []
@@ -55,13 +59,14 @@ async function getAdminOverview() {
       transfers = []
     }
   } else {
-    ;[users, inventory, sales, purchases, expenses, settings] = await Promise.all([
+    ;[users, inventory, sales, purchases, expenses, settings, businesses] = await Promise.all([
       User.find({}).select('-password').sort({ createdAt: -1 }).lean(),
       Inventory.find({}).sort({ updatedAt: -1 }).limit(300).lean(),
       Sale.find({}).sort({ createdAt: -1 }).limit(150).lean(),
       Purchase.find({}).sort({ createdAt: -1 }).limit(150).lean(),
       Expense.find({}).sort({ createdAt: -1 }).limit(150).lean(),
       Setting.find({}).lean(),
+      Business.find({}).lean(),
     ])
 
     movements = await storeModel.StockMovement.find({}).sort({ createdAt: -1 }).limit(150).lean()
@@ -75,16 +80,22 @@ async function getAdminOverview() {
   const shopOwners = users.filter((user) => user.role === 'admin')
   const shopByKey = new Map(shopOwners.map((owner) => [shopKey(owner), owner]))
   const usersByShop = new Map()
+  const businessesByShop = new Map(businesses.map((business) => [String(business.ownerKey || '').toLowerCase(), business]))
   users.filter((user) => !isSystemAdmin(user.role)).forEach((user) => {
     const key = shopKey(user)
     usersByShop.set(key, (usersByShop.get(key) || 0) + 1)
   })
   const shops = shopOwners.map((owner) => ({
     ownerKey: shopKey(owner),
-    name: owner.username,
+    name: businessesByShop.get(shopKey(owner))?.name || owner.username,
     email: owner.email,
     userCount: usersByShop.get(shopKey(owner)) || 1,
     active: owner.active !== false,
+    template: businessesByShop.get(shopKey(owner))?.template || 'other',
+    processingEnabled: businessFeatures(
+      businessesByShop.get(shopKey(owner))?.template,
+      businessesByShop.get(shopKey(owner))?.processingEnabled
+    ).processing,
   }))
   const settingsByShop = new Map(settings.map((setting) => [String(setting.ownerKey || 'legacy'), setting]))
   const getCurrency = (row) => settingsByShop.get(recordShopKey(row))?.financial?.currency || 'RWF'
@@ -225,6 +236,61 @@ async function createUser(body = {}) {
   return { id: user._id.toString(), username: user.username, email: user.email, role: user.role, active: user.active, ownerKey: user.ownerKey, ownerEmail: user.ownerEmail }
 }
 
+async function createBusiness(body = {}) {
+  const businessName = String(body.businessName || '').trim()
+  const username = String(body.username || '').trim()
+  const email = String(body.email || '').trim().toLowerCase()
+  const password = String(body.password || '')
+  const template = String(body.template || 'other').trim().toLowerCase()
+  const processingEnabled = Boolean(body.processingEnabled)
+
+  if (!businessName || !username || !email || password.length < 8) {
+    throw httpError(400, 'Business name, administrator name, email, and a password of at least 8 characters are required')
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw httpError(400, 'Enter a valid administrator email')
+  if (!BUSINESS_TEMPLATES.includes(template)) throw httpError(400, 'Choose a valid business template')
+  if (await User.findOne({ email })) throw httpError(409, 'An account with this email already exists')
+
+  const ownerKey = email
+  if (await Business.findOne({ ownerKey })) throw httpError(409, 'A business with this administrator email already exists')
+
+  const user = await User.create({
+    username,
+    email,
+    password: await bcrypt.hash(password, 10),
+    role: 'admin',
+    ownerKey,
+    ownerEmail: email,
+    active: true,
+  })
+
+  let business
+  try {
+    business = await Business.create({
+      ownerKey,
+      ownerEmail: email,
+      name: businessName,
+      email,
+      template,
+      processingEnabled,
+      active: true,
+    })
+  } catch (error) {
+    await User.deleteOne({ _id: user._id })
+    if (error && error.code === 11000) throw httpError(409, 'A business with this administrator email already exists')
+    throw error
+  }
+  CacheManager.clear()
+  return {
+    id: business._id.toString(),
+    ownerKey,
+    name: business.name,
+    email: user.email,
+    template: business.template,
+    processingEnabled: businessFeatures(business.template, business.processingEnabled).processing,
+  }
+}
+
 async function updateUser(id, body = {}, actingUserId) {
   if (!/^[a-f\d]{24}$/i.test(String(id))) throw httpError(400, 'Invalid user ID')
   const user = await User.findById(id)
@@ -314,4 +380,4 @@ function isToday(value) {
     && date.getDate() === today.getDate()
 }
 
-module.exports = { getAdminOverview, listUsers, createUser, updateUser }
+module.exports = { getAdminOverview, listUsers, createBusiness, createUser, updateUser }

@@ -6,12 +6,23 @@ const Expense = require('./Expense')
 const Setting = require('./Setting')
 const Venue = require('./Venue')
 const StockMovement = require('./StockMovement')
+const WarehouseStock = require('./WarehouseStock')
+const Customer = require('./Customer')
 const User = require('./User')
 const Loan = require('./Loan')
+const PartnerTransfer = require('./PartnerTransfer')
+const Business = require('./Business')
+const Branch = require('./Branch')
 const bcrypt = require('bcryptjs')
-const { LEGACY_OWNER_EMAIL, LEGACY_OWNER_KEY, currentTenant, scopedQuery, tenantFilter, withTenantFields } = require('../utils/tenantContext')
+const { LEGACY_OWNER_EMAIL, LEGACY_OWNER_KEY, MAIN_BRANCH_CODE, currentTenant, scopedQuery, branchScopedQuery, tenantFilter, withBranchFields, withTenantFields } = require('../utils/tenantContext')
 
 let legacyIndexMigration
+
+const DEFAULT_PLATFORM_ADMIN = {
+  username: 'Admin Manager',
+  email: 'admin@triltd.com',
+  password: 'admin123',
+}
 
 async function ensureStore() {
   await ensureTenantIndexes()
@@ -33,27 +44,22 @@ async function ensureStore() {
   if (!settingsCount) await Setting.create(markLegacy(seedData.settings))
   if (!venueCount) await Venue.insertMany(seedData.venues.map(markLegacy))
   if (!stockMovementCount && seedData.stockMovements) await StockMovement.insertMany(seedData.stockMovements.map(markLegacy))
-  if (!userCount) {
-    const defaultPassword = await bcrypt.hash('admin123', 10)
-    await User.create({
-      username: 'Admin Manager',
-      email: 'admin@triltd.com',
-      password: defaultPassword,
-      role: 'admin',
-    })
-  }
+  await ensurePlatformAdministrator(userCount)
+
+  await ensureBusinessStructure()
 }
 
 async function readStore() {
   await ensureStore()
   const filter = tenantFilter()
+  const operationalFilter = branchScopedQuery()
   const settings = await Setting.findOne(filter).lean()
 
   const [inventory, purchases, sales, expenses] = await Promise.all([
-    Inventory.find(filter).sort({ createdAt: -1 }).lean(),
-    Purchase.find(filter).sort({ createdAt: -1 }).lean(),
-    Sale.find(filter).sort({ createdAt: -1 }).lean(),
-    Expense.find(filter).sort({ createdAt: -1 }).lean(),
+    Inventory.find(operationalFilter).sort({ createdAt: -1 }).lean(),
+    Purchase.find(operationalFilter).sort({ createdAt: -1 }).lean(),
+    Sale.find(operationalFilter).sort({ createdAt: -1 }).lean(),
+    Expense.find(operationalFilter).sort({ createdAt: -1 }).lean(),
   ])
 
   return {
@@ -72,12 +78,12 @@ async function readStore() {
 async function writeStore(store) {
   try {
     const tenant = currentTenant()
-    const scoped = (item) => withTenantFields(item)
+    const scoped = (item) => withBranchFields(item)
     // Use bulkWrite for atomic operations
     if (store.inventory?.length) {
       const inventoryOps = store.inventory.map((item) => ({
         updateOne: {
-          filter: item._id ? { _id: item._id } : { ownerKey: tenant.ownerKey, sku: item.sku },
+          filter: item._id ? { _id: item._id } : branchScopedQuery({ sku: item.sku }),
           update: { $set: scoped(item) },
           upsert: true,
         },
@@ -90,7 +96,7 @@ async function writeStore(store) {
     if (store.purchases?.length) {
       const purchaseOps = store.purchases.map((item) => ({
         updateOne: {
-          filter: item._id ? { _id: item._id } : { ownerKey: tenant.ownerKey, id: item.id },
+          filter: item._id ? { _id: item._id } : branchScopedQuery({ id: item.id }),
           update: { $set: scoped(item) },
           upsert: true,
         },
@@ -103,7 +109,7 @@ async function writeStore(store) {
     if (store.sales?.length) {
       const saleOps = store.sales.map((item) => ({
         updateOne: {
-          filter: item._id ? { _id: item._id } : { ownerKey: tenant.ownerKey, id: item.id },
+          filter: item._id ? { _id: item._id } : branchScopedQuery({ id: item.id }),
           update: { $set: scoped(item) },
           upsert: true,
         },
@@ -116,7 +122,7 @@ async function writeStore(store) {
     if (store.expenses?.length) {
       const expenseOps = store.expenses.map((item) => ({
         updateOne: {
-          filter: item._id ? { _id: item._id } : { ownerKey: tenant.ownerKey, id: item.id },
+          filter: item._id ? { _id: item._id } : branchScopedQuery({ id: item.id }),
           update: { $set: scoped(item) },
           upsert: true,
         },
@@ -170,6 +176,13 @@ async function ensureTenantIndexes() {
       dropIndexIfExists(Loan, 'id_1'),
       dropIndexIfExists(Venue, 'name_1'),
       dropIndexIfExists(Venue, 'code_1'),
+      dropIndexIfExists(Inventory, 'ownerKey_1_sku_1'),
+      dropIndexIfExists(Purchase, 'ownerKey_1_id_1'),
+      dropIndexIfExists(Sale, 'ownerKey_1_id_1'),
+      dropIndexIfExists(Loan, 'ownerKey_1_id_1'),
+      dropIndexIfExists(PartnerTransfer, 'ownerKey_1_reference_1'),
+      dropIndexIfExists(Venue, 'ownerKey_1_name_1'),
+      dropIndexIfExists(Venue, 'ownerKey_1_code_1'),
     ])
   }
 
@@ -199,7 +212,76 @@ module.exports = {
   Setting,
   Venue,
   StockMovement,
+  WarehouseStock,
+  Customer,
   scopedQuery,
+  branchScopedQuery,
   tenantFilter,
+  withBranchFields,
   withTenantFields,
+}
+
+async function ensureBusinessStructure() {
+  const tenant = currentTenant()
+  if (!tenant.ownerKey) return
+
+  const existingSettings = await Setting.findOne({ ownerKey: tenant.ownerKey }).lean()
+  const defaultName = existingSettings?.profile?.displayName || 'My Business'
+  await Business.updateOne(
+    { ownerKey: tenant.ownerKey },
+    {
+      $setOnInsert: {
+        ownerKey: tenant.ownerKey,
+        ownerEmail: tenant.ownerEmail,
+        name: defaultName,
+        email: tenant.ownerEmail,
+        currency: existingSettings?.financial?.currency || 'RWF',
+        active: true,
+      },
+    },
+    { upsert: true }
+  )
+  await Branch.updateOne(
+    { ownerKey: tenant.ownerKey, code: MAIN_BRANCH_CODE },
+    {
+      $setOnInsert: {
+        ownerKey: tenant.ownerKey,
+        ownerEmail: tenant.ownerEmail,
+        name: 'Main Branch',
+        code: MAIN_BRANCH_CODE,
+        active: true,
+        warehouses: [],
+      },
+    },
+    { upsert: true }
+  )
+}
+
+async function ensurePlatformAdministrator(userCount) {
+  const legacyPlatformAdmin = await User.findOne({ email: DEFAULT_PLATFORM_ADMIN.email })
+
+  if (legacyPlatformAdmin) {
+    const isLegacyBootstrapAccount = legacyPlatformAdmin.username === DEFAULT_PLATFORM_ADMIN.username
+      && legacyPlatformAdmin.role === 'admin'
+
+    if (isLegacyBootstrapAccount) {
+      legacyPlatformAdmin.role = 'system_admin'
+      legacyPlatformAdmin.ownerKey = ''
+      legacyPlatformAdmin.ownerEmail = ''
+      legacyPlatformAdmin.accessRoleCode = ''
+      legacyPlatformAdmin.branchCodes = []
+      legacyPlatformAdmin.defaultBranchCode = MAIN_BRANCH_CODE
+      await legacyPlatformAdmin.save()
+    }
+    return
+  }
+
+  if (userCount) return
+
+  await User.create({
+    username: DEFAULT_PLATFORM_ADMIN.username,
+    email: DEFAULT_PLATFORM_ADMIN.email,
+    password: await bcrypt.hash(DEFAULT_PLATFORM_ADMIN.password, 10),
+    role: 'system_admin',
+  })
 }

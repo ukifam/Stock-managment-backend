@@ -14,6 +14,9 @@ const expenseSchema = new mongoose.Schema(
     id: { type: String, index: true },
     ownerKey: { type: String, default: 'legacy', index: true },
     ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
+    branchCode: { type: String, default: 'MAIN', trim: true, uppercase: true, index: true },
+    createdBy: { id: String, username: String, email: String },
+    updatedBy: { id: String, username: String, email: String },
     date: { type: String, required: true, index: true },
     amount: { type: Number, required: true },
     subtotal: { type: Number, default: 0 },
@@ -30,6 +33,6 @@ const expenseSchema = new mongoose.Schema(
 )
 
 expenseSchema.index({ date: 1, category: 1 })
-expenseSchema.index({ ownerKey: 1, id: 1 })
+expenseSchema.index({ ownerKey: 1, branchCode: 1, id: 1 })
 
 module.exports = mongoose.model('Expense', expenseSchema)

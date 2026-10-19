@@ -3,6 +3,7 @@ const storeModel = require('../models/storeModel')
 const httpError = require('../utils/httpError')
 const CacheManager = require('../utils/cache')
 const { required } = require('../utils/validation')
+const { auditActor } = require('../utils/tenantContext')
 
 /**
  * List venues with pagination, filtering, and caching
@@ -18,7 +19,7 @@ async function listVenues({ page = 1, limit = 50, type = '', status = '' } = {})
     return cached
   }
 
-  let query = Venue.find(storeModel.tenantFilter())
+  let query = Venue.find(storeModel.branchScopedQuery())
 
   if (type) {
     query = query.where('type').equals(type)
@@ -62,7 +63,7 @@ async function getVenue(code) {
     return cached
   }
 
-  const venue = await Venue.findOne({ ...storeModel.tenantFilter(), code }).lean()
+  const venue = await Venue.findOne(storeModel.branchScopedQuery({ code })).lean()
   if (!venue) throw httpError(404, 'Venue not found')
 
   CacheManager.set(cacheKey, venue, 60000)
@@ -78,12 +79,12 @@ async function createVenue(body) {
   if (missing.length) throw httpError(400, 'Missing required fields', { fields: missing })
 
   // Check for duplicates
-  const existing = await Venue.findOne(storeModel.scopedQuery({ $or: [{ name: body.name }, { code: body.code }] }))
+  const existing = await Venue.findOne(storeModel.branchScopedQuery({ $or: [{ name: body.name }, { code: body.code }] }))
   if (existing) {
     throw httpError(409, `Venue with name or code already exists`)
   }
 
-  const venue = new Venue(storeModel.withTenantFields({
+  const venue = new Venue(storeModel.withBranchFields({
     name: body.name,
     code: body.code.toUpperCase(),
     type: body.type || 'Warehouse',
@@ -109,17 +110,17 @@ async function createVenue(body) {
  */
 async function updateVenue(code, body) {
   await storeModel.ensureStore()
-  const venue = await Venue.findOne({ ...storeModel.tenantFilter(), code })
+  const venue = await Venue.findOne(storeModel.branchScopedQuery({ code }))
   if (!venue) throw httpError(404, 'Venue not found')
 
   // Check if new code/name already exists
   if (body.code && body.code !== code) {
-    const existing = await Venue.findOne({ ...storeModel.tenantFilter(), code: body.code })
+    const existing = await Venue.findOne(storeModel.branchScopedQuery({ code: body.code }))
     if (existing) throw httpError(409, 'Venue code already exists')
   }
 
   if (body.name) {
-    const existing = await Venue.findOne({ ...storeModel.tenantFilter(), name: body.name, _id: { $ne: venue._id } })
+    const existing = await Venue.findOne(storeModel.branchScopedQuery({ name: body.name, _id: { $ne: venue._id } }))
     if (existing) throw httpError(409, 'Venue name already exists')
   }
 
@@ -134,6 +135,7 @@ async function updateVenue(code, body) {
   if (body.contact) venue.contact = body.contact
   if (body.status) venue.status = body.status
   if (body.notes) venue.notes = body.notes
+  venue.updatedBy = auditActor()
 
   await venue.save()
 
@@ -149,7 +151,7 @@ async function updateVenue(code, body) {
  */
 async function deleteVenue(code) {
   await storeModel.ensureStore()
-  const result = await Venue.deleteOne({ ...storeModel.tenantFilter(), code })
+  const result = await Venue.deleteOne(storeModel.branchScopedQuery({ code }))
   if (result.deletedCount === 0) throw httpError(404, 'Venue not found')
 
   // Clear cache

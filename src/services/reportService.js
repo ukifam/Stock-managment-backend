@@ -41,13 +41,16 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
   // Inventory Valuation & Health
   const totalStockUnits = (store.inventory || []).reduce((sum, item) => sum + Number(item.stock || 0), 0)
   const totalInventoryValuation = (store.inventory || []).reduce((sum, item) => sum + Number(item.stock || 0) * Number(item.price || 0), 0)
-  const lowStockCount = (store.inventory || []).filter(item => Number(item.stock || 0) <= Number(item.capacity || 25) && Number(item.stock || 0) > 0).length
+  const lowStockCount = (store.inventory || []).filter((item) => {
+    const threshold = Number(item.reorderLevel || 0) || Number(item.capacity || 25)
+    return Number(item.stock || 0) <= threshold && Number(item.stock || 0) > 0
+  }).length
   const outOfStockCount = (store.inventory || []).filter(item => Number(item.stock || 0) <= 0).length
 
   // Stock Discrepancies & Shrinkage from Movements
   let allMovements = []
   try {
-    allMovements = await storeModel.StockMovement.find({}).lean()
+    allMovements = await storeModel.StockMovement.find(storeModel.branchScopedQuery()).lean()
   } catch (err) {
     allMovements = []
   }

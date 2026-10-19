@@ -37,6 +37,8 @@ require.cache[storeModelPath] = {
     withTenantFields: (record) => record,
     scopedQuery: (query) => query,
     tenantFilter: () => ({}),
+    branchScopedQuery: (query) => query,
+    withBranchFields: (record) => record,
     StockMovement: stockMovementModel,
   },
 }

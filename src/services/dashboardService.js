@@ -50,7 +50,7 @@ function totals(store, sales, purchases, inventory) {
     (sum, purchase) => sum + Number(purchase.quantity || 0) * Number(purchase.unitPrice || 0),
     0,
   )
-  const lowStockCount = inventory.filter((item) => Number(item.stock || 0) <= Number(store.settings.inventory.lowStockThreshold || 25)).length
+  const lowStockCount = inventory.filter((item) => Number(item.stock || 0) <= stockThreshold(item, store.settings.inventory.lowStockThreshold)).length
 
   return {
     totalProducts: inventory.length,
@@ -63,9 +63,8 @@ function totals(store, sales, purchases, inventory) {
 }
 
 function lowStockAlerts(store) {
-  const threshold = Number(store.settings.inventory.lowStockThreshold || 25)
   return store.inventory
-    .filter((item) => item.stock <= threshold)
+    .filter((item) => Number(item.stock || 0) <= stockThreshold(item, store.settings.inventory.lowStockThreshold))
     .sort((a, b) => a.stock - b.stock)
     .map((item) => ({
       name: item.item,
@@ -76,15 +75,20 @@ function lowStockAlerts(store) {
 }
 
 function filterInventory(inventory, settings, category, stockStatus) {
-  const threshold = Number(settings.inventory.lowStockThreshold || 25)
   return inventory.filter((item) => {
     if (category && item.category !== category) return false
     const stock = Number(item.stock || 0)
     if (stockStatus === 'out' && stock !== 0) return false
+    const threshold = stockThreshold(item, settings.inventory.lowStockThreshold)
     if (stockStatus === 'low' && (stock === 0 || stock > threshold)) return false
     if (stockStatus === 'available' && stock <= threshold) return false
     return true
   })
+}
+
+function stockThreshold(item, fallback) {
+  const reorderLevel = Number(item.reorderLevel || 0)
+  return reorderLevel > 0 ? reorderLevel : Number(fallback || 25)
 }
 
 function catalogItems(store) {

@@ -28,6 +28,22 @@ async function deleteSale(req, res) {
   res.json(await saleService.deleteSale(req.params.id))
 }
 
+async function listSaleReturns(req, res) {
+  res.json(await saleService.listSaleReturns(req.params.id))
+}
+
+async function createSaleReturn(req, res) {
+  res.status(201).json(await saleService.createSaleReturn(req.params.id, req.body))
+}
+
+async function approveSaleReturn(req, res) {
+  res.json(await saleService.approveSaleReturn(req.params.returnId))
+}
+
+async function rejectSaleReturn(req, res) {
+  res.json(await saleService.rejectSaleReturn(req.params.returnId))
+}
+
 module.exports = {
   listSales,
   getAvailableItems,
@@ -36,4 +52,8 @@ module.exports = {
   updateSale,
   updateSaleStatus,
   deleteSale,
+  listSaleReturns,
+  createSaleReturn,
+  approveSaleReturn,
+  rejectSaleReturn,
 }

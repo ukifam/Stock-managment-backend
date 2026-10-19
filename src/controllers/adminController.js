@@ -12,8 +12,12 @@ async function createUser(req, res) {
   res.status(201).json(await adminService.createUser(req.body))
 }
 
+async function createBusiness(req, res) {
+  res.status(201).json(await adminService.createBusiness(req.body))
+}
+
 async function updateUser(req, res) {
   res.json(await adminService.updateUser(req.params.id, req.body, req.user.id))
 }
 
-module.exports = { overview, listUsers, createUser, updateUser }
+module.exports = { overview, listUsers, createBusiness, createUser, updateUser }

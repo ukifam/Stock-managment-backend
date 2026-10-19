@@ -2,7 +2,6 @@ const storeModel = require('../models/storeModel')
 const Loan = require('../models/Loan')
 const PartnerTransfer = require('../models/PartnerTransfer')
 const { searchRows } = require('../utils/filters')
-const { tenantFilter } = require('../utils/tenantContext')
 
 async function searchAll(query = '') {
   const needle = String(query || '').trim()
@@ -10,9 +9,9 @@ async function searchAll(query = '') {
 
   const store = await storeModel.readStore()
   const [loans, stockMovements, partnerTransfers] = await Promise.all([
-    Loan.find(tenantFilter()).lean(),
-    storeModel.StockMovement.find(tenantFilter()).lean(),
-    PartnerTransfer.find(tenantFilter()).lean(),
+    Loan.find(storeModel.branchScopedQuery()).lean(),
+    storeModel.StockMovement.find(storeModel.branchScopedQuery()).lean(),
+    PartnerTransfer.find(storeModel.branchScopedQuery()).lean(),
   ])
   const inventoryBySku = new Map(store.inventory.map((row) => [row.sku, row.item]))
   const results = [

@@ -2,6 +2,7 @@ const storeModel = require('../models/storeModel')
 const httpError = require('../utils/httpError')
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
+const { currentTenant } = require('../utils/tenantContext')
 
 async function listStockMovements({ sku, type, search, page = 1, limit = 50 }) {
   const pageNum = Math.max(1, parseInt(page, 10) || 1)
@@ -25,7 +26,7 @@ async function listStockMovements({ sku, type, search, page = 1, limit = 50 }) {
   }
   const skip = (pageNum - 1) * limitNum
 
-  const scopedQuery = storeModel.scopedQuery(query)
+  const scopedQuery = storeModel.branchScopedQuery(query)
   const [rows, totalCount] = await Promise.all([
     storeModel.StockMovement.find(scopedQuery).sort({ date: -1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
     storeModel.StockMovement.countDocuments(scopedQuery)
@@ -67,9 +68,14 @@ async function adjustStock(body) {
   }
 
   const item = store.inventory[inventoryIndex]
-  const previousStock = item.stock
+  const previousStock = Number(item.stock || 0)
   const quantityChange = parseFloat(body.quantity)
+  if (!Number.isFinite(quantityChange) || quantityChange === 0) throw httpError(400, 'Adjustment quantity must be a non-zero number')
   const newStock = previousStock + quantityChange
+  const allowNegative = Boolean(body.allowNegative) && ['admin', 'system_admin'].includes(String(currentTenant().role || '').toLowerCase())
+  if (newStock < 0 && !allowNegative) {
+    throw httpError(400, 'This adjustment would create negative stock. An administrator must explicitly authorize it.')
+  }
 
   // Update inventory item in memory for the storeModel
   store.inventory[inventoryIndex] = {
@@ -80,11 +86,21 @@ async function adjustStock(body) {
 
   // Create the movement record
   const movement = await storeModel.StockMovement.create({
-    ...storeModel.withTenantFields({
+    ...storeModel.withBranchFields({
     date: body.date || new Date().toISOString().slice(0, 10),
     sku: body.sku,
     type: body.type,
     quantity: quantityChange,
+    originalQuantity: Number(body.originalQuantity ?? Math.abs(quantityChange)),
+    originalUnit: body.originalUnit || item.baseUnit || '',
+    convertedQuantity: Number(body.convertedQuantity ?? Math.abs(quantityChange)),
+    convertedUnit: body.convertedUnit || item.baseUnit || '',
+    warehouseCode: body.warehouseCode || item.defaultWarehouseCode || '',
+    fromWarehouseCode: body.fromWarehouseCode || '',
+    toWarehouseCode: body.toWarehouseCode || '',
+    batchNumber: body.batchNumber || '',
+    expiryDate: body.expiryDate || '',
+    serialNumber: body.serialNumber || '',
     previousStock,
     newStock,
     reason: body.reason,
@@ -98,6 +114,14 @@ async function adjustStock(body) {
 
   // Save the updated inventory
   await storeModel.writeStore(store)
+  await syncWarehouseProjection({
+    sku: body.sku,
+    quantity: quantityChange,
+    previousStock,
+    warehouseCode: body.warehouseCode || item.defaultWarehouseCode || '',
+    fromWarehouseCode: body.fromWarehouseCode || '',
+    toWarehouseCode: body.toWarehouseCode || '',
+  })
   
   // Clear inventory caches since stock changed
   CacheManager.clear()
@@ -134,7 +158,7 @@ async function sendToShowcase(body) {
   }
 
   const movement = await storeModel.StockMovement.create({
-    ...storeModel.withTenantFields({
+    ...storeModel.withBranchFields({
       date,
       sku: item.sku,
       type: 'SHOWCASE_OUT',
@@ -151,13 +175,19 @@ async function sendToShowcase(body) {
   })
 
   await storeModel.writeStore(store)
+  await syncWarehouseProjection({
+    sku: item.sku,
+    quantity: -quantity,
+    previousStock,
+    warehouseCode: body.warehouseCode || item.defaultWarehouseCode || '',
+  })
   CacheManager.clear()
   return { ...movement.toObject?.() || movement, item: item.item }
 }
 
 async function listOpenShowcases() {
   const movements = await storeModel.StockMovement
-    .find(storeModel.scopedQuery({ type: { $in: ['SHOWCASE_OUT', 'SHOWCASE_RETURN', 'SHOWCASE_SALE'] } }))
+    .find(storeModel.branchScopedQuery({ type: { $in: ['SHOWCASE_OUT', 'SHOWCASE_RETURN', 'SHOWCASE_SALE'] } }))
     .sort({ date: 1, createdAt: 1 })
     .lean()
   const cases = new Map()
@@ -202,7 +232,7 @@ async function listOpenShowcases() {
 
 async function closeShowcase(reference, body) {
   const movements = await storeModel.StockMovement
-    .find(storeModel.scopedQuery({ reference }))
+    .find(storeModel.branchScopedQuery({ reference }))
     .sort({ date: 1, createdAt: 1 })
     .lean()
   const issue = movements.find((movement) => movement.type === 'SHOWCASE_OUT')
@@ -282,12 +312,22 @@ function inventoryStatus(stock, capacity) {
  * Internal function to record a movement without manual API call (e.g. from purchases/sales)
  */
 async function recordMovement(data) {
-  return storeModel.StockMovement.create({
-    ...storeModel.withTenantFields({
+  const movement = await storeModel.StockMovement.create({
+    ...storeModel.withBranchFields({
     date: data.date || new Date().toISOString().slice(0, 10),
     sku: data.sku,
     type: data.type,
     quantity: data.quantity,
+    originalQuantity: Number(data.originalQuantity ?? Math.abs(Number(data.quantity || 0))),
+    originalUnit: data.originalUnit || '',
+    convertedQuantity: Number(data.convertedQuantity ?? Math.abs(Number(data.quantity || 0))),
+    convertedUnit: data.convertedUnit || '',
+    warehouseCode: data.warehouseCode || '',
+    fromWarehouseCode: data.fromWarehouseCode || '',
+    toWarehouseCode: data.toWarehouseCode || '',
+    batchNumber: data.batchNumber || '',
+    expiryDate: data.expiryDate || '',
+    serialNumber: data.serialNumber || '',
     previousStock: data.previousStock,
     newStock: data.newStock,
     reason: data.reason || '',
@@ -298,6 +338,14 @@ async function recordMovement(data) {
     user: data.user || 'System'
     })
   })
+  await syncWarehouseProjection(data)
+  return movement
+}
+
+async function syncWarehouseProjection(data) {
+  // Unit tests and import tools can provide an in-memory store without warehouse collections.
+  if (!storeModel.WarehouseStock) return
+  await require('./warehouseStockService').applyLedgerMovement(data)
 }
 
 module.exports = {

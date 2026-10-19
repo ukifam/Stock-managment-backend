@@ -38,8 +38,10 @@ require.cache[transferModelPath] = {
   exports: { find: () => ({ sort() { return this }, limit() { return this }, lean: async () => [{ _id: 'TR-1', reference: 'TR-1', item: 'Partner Item', partner: 'Partner', status: 'OPEN', quantityReceived: 2, quantitySold: 0, quantityReturned: 0, receivedDate: '2026-10-01' }] }) },
 }
 
-const { getAdminOverview } = require('../src/services/adminService')
+const { createBusiness, getAdminOverview } = require('../src/services/adminService')
 const { adminMiddleware } = require('../src/middleware/adminMiddleware')
+const User = require('../src/models/User')
+const Business = require('../src/models/Business')
 
 test('admin overview summarizes tenant activity and provides operational destinations', async () => {
   const overview = await getAdminOverview()
@@ -54,12 +56,53 @@ test('admin overview summarizes tenant activity and provides operational destina
   assert.ok(overview.activity.some((entry) => entry.section === 'stock-movements' && entry.actor === 'Cashier'))
 })
 
-test('admin middleware permits admins and rejects ordinary users', () => {
+test('admin middleware permits system administrators and rejects other users', () => {
   let nextCalled = false
-  adminMiddleware({ user: { role: 'admin' } }, {}, () => { nextCalled = true })
+  adminMiddleware({ user: { role: 'system_admin' } }, {}, () => { nextCalled = true })
   assert.equal(nextCalled, true)
 
   let denied
-  adminMiddleware({ user: { role: 'staff' } }, {}, (error) => { denied = error })
+  adminMiddleware({ user: { role: 'admin' } }, {}, (error) => { denied = error })
   assert.equal(denied.status, 403)
+})
+
+test('system administrators can create a business with a processing owner account', async () => {
+  const originalUserMethods = { findOne: User.findOne, create: User.create, deleteOne: User.deleteOne }
+  const originalBusinessMethods = { findOne: Business.findOne, create: Business.create }
+  let createdUser
+  let createdBusiness
+  User.findOne = async () => null
+  User.create = async (payload) => {
+    createdUser = payload
+    return { _id: { toString: () => 'user-id' } }
+  }
+  User.deleteOne = async () => ({ deletedCount: 1 })
+  Business.findOne = async () => null
+  Business.create = async (payload) => {
+    createdBusiness = payload
+    return { ...payload, _id: { toString: () => 'business-id' } }
+  }
+
+  try {
+    const result = await createBusiness({
+      businessName: 'Hilltop Mill',
+      username: 'Business Owner',
+      email: 'owner@example.com',
+      password: 'secure-password',
+      template: 'maize_mill',
+      processingEnabled: true,
+    })
+
+    assert.equal(result.name, 'Hilltop Mill')
+    assert.equal(result.ownerKey, 'owner@example.com')
+    assert.equal(result.processingEnabled, true)
+    assert.equal(createdUser.role, 'admin')
+    assert.equal(createdUser.ownerKey, 'owner@example.com')
+    assert.notEqual(createdUser.password, 'secure-password')
+    assert.equal(createdBusiness.name, 'Hilltop Mill')
+    assert.equal(createdBusiness.template, 'maize_mill')
+  } finally {
+    Object.assign(User, originalUserMethods)
+    Object.assign(Business, originalBusinessMethods)
+  }
 })

@@ -1,16 +1,26 @@
 const httpError = require('../utils/httpError')
-const { normalizeRole } = require('../utils/roles')
+const { hasPermission } = require('../services/accessRoleService')
 
 function shopFeatureMiddleware(feature) {
-  return (req, _res, next) => {
-    const role = normalizeRole(req.user?.role)
-    if (role === 'admin' || role === 'system_admin') return next()
-
-    const allowedFeatures = new Set(['dashboard', 'inventory', 'sales', 'expenses', 'transfers', 'search'])
-    if (role === 'staff' && allowedFeatures.has(feature)) return next()
-
-    return next(httpError(403, 'Your staff account does not have access to this area'))
+  return async (req, _res, next) => {
+    try {
+      const action = actionForRequest(req)
+      if (await hasPermission(req.user, feature, action)) return next()
+      return next(httpError(403, `You do not have permission to ${action} this module`))
+    } catch (error) {
+      next(error)
+    }
   }
 }
 
-module.exports = { shopFeatureMiddleware }
+function actionForRequest(req) {
+  if (req.method === 'GET') return req.query?.export || /export/i.test(req.path) ? 'export' : 'view'
+  if (req.method === 'DELETE') return 'delete'
+  const status = String(req.body?.status || req.body?.outcome || '').toUpperCase()
+  if (status.includes('CANCEL')) return 'cancel'
+  if (/\/(status|quality|approve|reject)(?:\/|$)/i.test(req.path)) return 'approve'
+  if (req.method === 'POST') return 'create'
+  return 'edit'
+}
+
+module.exports = { actionForRequest, shopFeatureMiddleware }

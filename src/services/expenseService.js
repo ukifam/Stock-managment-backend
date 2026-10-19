@@ -138,7 +138,7 @@ async function deleteExpense(id) {
     if (mongoose.isValidObjectId(id)) {
       selectors.push({ _id: id })
     }
-    await Expense.deleteOne(storeModel.scopedQuery({ $or: selectors }))
+    await Expense.deleteOne(storeModel.branchScopedQuery({ $or: selectors }))
   } catch (e) {
     console.error('Error deleting expense from MongoDB:', e)
   }

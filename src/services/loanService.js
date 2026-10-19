@@ -1,9 +1,10 @@
 const Loan = require('../models/Loan')
 const storeModel = require('../models/storeModel')
+const { auditActor } = require('../utils/tenantContext')
 
 async function generateLoanId(type) {
   const prefix = type === 'GIVEN' ? 'LG' : 'LT'
-  const count = await Loan.countDocuments({ ...storeModel.tenantFilter(), type })
+  const count = await Loan.countDocuments(storeModel.branchScopedQuery({ type }))
   const nextNum = 1000 + count + 1
   return `${prefix}-${nextNum}`
 }
@@ -26,8 +27,8 @@ async function listLoans({ type, status, search, page = 1, limit = 50 } = {}) {
 
   const skip = (Math.max(1, page) - 1) * limit
   const [rows, count] = await Promise.all([
-    Loan.find(storeModel.scopedQuery(query)).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
-    Loan.countDocuments(storeModel.scopedQuery(query)),
+    Loan.find(storeModel.branchScopedQuery(query)).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
+    Loan.countDocuments(storeModel.branchScopedQuery(query)),
   ])
 
   return { rows, count, page: Number(page), limit: Number(limit) }
@@ -35,7 +36,7 @@ async function listLoans({ type, status, search, page = 1, limit = 50 } = {}) {
 
 async function getLoanById(id) {
   await storeModel.ensureStore()
-  const loan = await Loan.findOne({ ...storeModel.tenantFilter(), id })
+  const loan = await Loan.findOne(storeModel.branchScopedQuery({ id }))
   if (!loan) {
     throw new Error(`Loan with ID ${id} not found`)
   }
@@ -68,7 +69,7 @@ async function createLoan(payload) {
   const customId = payload.id || (await generateLoanId(type))
   const today = new Date().toISOString().slice(0, 10)
 
-  const loan = new Loan(storeModel.withTenantFields({
+  const loan = new Loan(storeModel.withBranchFields({
     id: customId,
     type,
     partyName: payload.partyName.trim(),
@@ -99,7 +100,7 @@ async function createLoan(payload) {
 
 async function recordRepayment(id, payload) {
   await storeModel.ensureStore()
-  const loan = await Loan.findOne({ ...storeModel.tenantFilter(), id })
+  const loan = await Loan.findOne(storeModel.branchScopedQuery({ id }))
   if (!loan) {
     throw new Error(`Loan with ID ${id} not found`)
   }
@@ -117,7 +118,7 @@ async function recordRepayment(id, payload) {
     paymentMethod: payload.paymentMethod || 'Bank Transfer',
     reference: payload.reference || '',
     notes: payload.notes || '',
-    recordedBy: payload.recordedBy || 'Admin',
+    recordedBy: auditActor().username || payload.recordedBy || 'System',
   }
 
   loan.repayments.push(repayment)
@@ -128,13 +129,14 @@ async function recordRepayment(id, payload) {
     loan.status = 'PAID'
   }
 
+  loan.updatedBy = auditActor()
   await loan.save()
   return loan
 }
 
 async function updateLoan(id, payload) {
   await storeModel.ensureStore()
-  const loan = await Loan.findOne({ ...storeModel.tenantFilter(), id })
+  const loan = await Loan.findOne(storeModel.branchScopedQuery({ id }))
   if (!loan) {
     throw new Error(`Loan with ID ${id} not found`)
   }
@@ -159,13 +161,14 @@ async function updateLoan(id, payload) {
     }
   })
 
+  loan.updatedBy = auditActor()
   await loan.save()
   return loan
 }
 
 async function deleteLoan(id) {
   await storeModel.ensureStore()
-  const loan = await Loan.findOneAndDelete({ ...storeModel.tenantFilter(), id })
+  const loan = await Loan.findOneAndDelete(storeModel.branchScopedQuery({ id }))
   if (!loan) {
     throw new Error(`Loan with ID ${id} not found`)
   }
@@ -174,7 +177,7 @@ async function deleteLoan(id) {
 
 async function getLoanMetrics() {
   await storeModel.ensureStore()
-  const loans = await Loan.find(storeModel.tenantFilter())
+  const loans = await Loan.find(storeModel.branchScopedQuery())
 
   let totalGivenPrincipal = 0
   let totalGivenOutstanding = 0

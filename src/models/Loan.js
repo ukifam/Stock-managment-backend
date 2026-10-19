@@ -17,6 +17,9 @@ const loanSchema = new mongoose.Schema(
   {
     ownerKey: { type: String, default: 'legacy', index: true },
     ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
+    branchCode: { type: String, default: 'MAIN', trim: true, uppercase: true, index: true },
+    createdBy: { id: String, username: String, email: String },
+    updatedBy: { id: String, username: String, email: String },
     id: { type: String, required: true, index: true },
     type: { type: String, required: true, enum: ['GIVEN', 'TAKEN'], index: true },
     partyName: { type: String, required: true, index: true },
@@ -58,6 +61,6 @@ const loanSchema = new mongoose.Schema(
 )
 
 loanSchema.index({ type: 1, status: 1, startDate: -1 })
-loanSchema.index({ ownerKey: 1, id: 1 }, { unique: true })
+loanSchema.index({ ownerKey: 1, branchCode: 1, id: 1 }, { unique: true })
 
 module.exports = mongoose.model('Loan', loanSchema)

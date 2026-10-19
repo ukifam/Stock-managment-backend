@@ -4,12 +4,15 @@ function filterByPeriod(rows, period = 'yearly') {
 
 function filterByRange(rows, from, to) {
   if (!from && !to) return rows
-  const fromDate = from ? parseDate(`${from}T00:00:00`) : new Date(-8640000000000000)
-  const toDate = to ? parseDate(`${to}T23:59:59.999`) : new Date(8640000000000000)
+  const fromClean = String(from || '').slice(0, 10)
+  const toClean = String(to || '').slice(0, 10)
+  const fromDate = fromClean ? parseDate(`${fromClean}T00:00:00`) : new Date(-8640000000000000)
+  const toDate = toClean ? parseDate(`${toClean}T23:59:59.999`) : new Date(8640000000000000)
   if (!fromDate || !toDate) return rows
 
   return rows.filter((row) => {
-    const date = parseDate(`${row.date}T12:00:00`)
+    const raw = String(row.date || '').slice(0, 10)
+    const date = parseDate(`${raw}T12:00:00`)
     return date && date >= fromDate && date <= toDate
   })
 }
@@ -21,7 +24,8 @@ function searchRows(rows, query) {
 }
 
 function isInPeriod(value, period) {
-  const date = parseDate(`${value}T12:00:00`)
+  const raw = String(value || '').slice(0, 10)
+  const date = parseDate(`${raw}T12:00:00`)
   const now = new Date()
   if (!date) return false
 

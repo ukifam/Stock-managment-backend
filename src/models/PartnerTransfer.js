@@ -4,6 +4,9 @@ const partnerTransferSchema = new mongoose.Schema(
   {
     ownerKey: { type: String, default: 'legacy', index: true },
     ownerEmail: { type: String, default: 'info@ukifam.com', lowercase: true, trim: true },
+    branchCode: { type: String, default: 'MAIN', trim: true, uppercase: true, index: true },
+    createdBy: { id: String, username: String, email: String },
+    updatedBy: { id: String, username: String, email: String },
     reference: { type: String, required: true, trim: true },
     partner: { type: String, required: true, trim: true, index: true },
     partnerPhone: { type: String, default: '' },
@@ -24,7 +27,7 @@ const partnerTransferSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
-partnerTransferSchema.index({ ownerKey: 1, reference: 1 }, { unique: true })
-partnerTransferSchema.index({ ownerKey: 1, status: 1, receivedDate: -1 })
+partnerTransferSchema.index({ ownerKey: 1, branchCode: 1, reference: 1 }, { unique: true })
+partnerTransferSchema.index({ ownerKey: 1, branchCode: 1, status: 1, receivedDate: -1 })
 
 module.exports = mongoose.model('PartnerTransfer', partnerTransferSchema)

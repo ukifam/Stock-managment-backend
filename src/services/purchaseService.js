@@ -8,6 +8,7 @@ const { formatDocumentId, normalizeDocumentId } = require('../utils/idFormatter'
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
 const stockMovementService = require('./stockMovementService')
+const { convertItemQuantity, convertQuantity, normalizeUnitCode } = require('./unitConversionService')
 
 /**
  * List purchases with pagination, filtering, and caching
@@ -59,6 +60,7 @@ async function createPurchase(body) {
 
   const store = await storeModel.readStore()
   const purchase = buildPurchaseRecord(body, store, 0)
+  await applyPurchaseUnitConversion(purchase, store, body)
   store.purchases.unshift(purchase)
   applyPurchaseToInventory(store, purchase)
   await storeModel.writeStore(store)
@@ -73,7 +75,14 @@ async function createPurchase(body) {
       previousStock: existing.stock - purchase.quantity,
       newStock: existing.stock,
       reason: 'Purchase received',
-      reference: purchase.id
+      reference: purchase.id,
+      originalQuantity: purchase.originalQuantity,
+      originalUnit: purchase.originalUnit,
+      convertedQuantity: purchase.convertedQuantity,
+      convertedUnit: purchase.convertedUnit,
+      warehouseCode: purchase.warehouseCode,
+      batchNumber: purchase.batchNumber,
+      expiryDate: purchase.expiryDate,
     })
   }
 
@@ -91,21 +100,41 @@ async function bulkImportPurchases(bodies) {
   const currency = currencyFromSettings(store.settings)
   const created = []
 
-  bodies.forEach((body, index) => {
+  for (const [index, body] of bodies.entries()) {
     const item = String(body.item || body.description || body.product || '').trim()
-    if (!item) return
+    if (!item) continue
 
     const purchase = buildPurchaseRecord({ ...body, item }, store, index)
+    await applyPurchaseUnitConversion(purchase, store, body)
     store.purchases.unshift(purchase)
     applyPurchaseToInventory(store, purchase)
     created.push(purchase)
-  })
+  }
 
   if (created.length === 0) {
     throw httpError(400, 'No valid purchase rows were found in the file')
   }
 
   await storeModel.writeStore(store)
+  for (const purchase of created) {
+    const existing = findInventoryItem(store.inventory, purchase)
+    if (!existing) continue
+    await stockMovementService.recordMovement({
+      date: purchase.date,
+      sku: existing.sku,
+      type: 'PURCHASE',
+      quantity: purchase.quantity,
+      previousStock: Number(existing.stock || 0) - Number(purchase.quantity || 0),
+      newStock: Number(existing.stock || 0),
+      reason: 'Imported purchase received',
+      reference: purchase.id,
+      originalQuantity: purchase.originalQuantity,
+      originalUnit: purchase.originalUnit,
+      convertedQuantity: purchase.convertedQuantity,
+      convertedUnit: purchase.convertedUnit,
+      warehouseCode: purchase.warehouseCode,
+    })
+  }
   CacheManager.clear()
 
   return {
@@ -142,10 +171,10 @@ async function updatePurchase(id, body) {
   if (index === -1) throw httpError(404, 'Purchase not found')
 
   const previousPurchase = store.purchases[index]
-  const quantity = parseQuantity(body.quantity, previousPurchase.quantity)
+  const originalQuantity = parseQuantity(body.quantity, previousPurchase.originalQuantity || previousPurchase.quantity)
   const unitPrice = parseMoney(body.unitPrice ?? body.price, previousPurchase.unitPrice)
   const inventoryPrice = parseMoney(body.inventoryPrice, previousPurchase.inventoryPrice ?? unitPrice)
-  const total = quantity * unitPrice
+  const total = originalQuantity * unitPrice
   const payment = body.payment || previousPurchase.payment || 'Cash'
   const paidAmount = resolvePaidAmount(body, total, payment, previousPurchase.paidAmount)
   const outstanding = resolveOutstanding(body, total, paidAmount, payment, previousPurchase.outstanding)
@@ -159,7 +188,9 @@ async function updatePurchase(id, body) {
     sku: body.sku || '',
     category: body.category || 'Uncategorized',
     extractedText: body.extractedText ?? previousPurchase.extractedText ?? '',
-    quantity,
+    quantity: originalQuantity,
+    originalQuantity,
+    originalUnit: body.unit || body.purchaseUnit || previousPurchase.originalUnit || '',
     unitPrice,
     inventoryPrice,
     payment,
@@ -167,6 +198,7 @@ async function updatePurchase(id, body) {
     outstanding,
     status: body.status || purchaseStatus(payment, outstanding),
   }
+  await applyPurchaseUnitConversion(nextPurchase, store, body)
 
   if (nextPurchase.id !== previousPurchase.id && store.purchases.some((purchase, purchaseIndex) => purchaseIndex !== index && purchase.id === nextPurchase.id)) {
     throw httpError(409, 'Purchase ID already exists')
@@ -187,7 +219,12 @@ async function updatePurchase(id, body) {
       previousStock: existing.stock - (nextPurchase.quantity - previousPurchase.quantity),
       newStock: existing.stock,
       reason: 'Purchase updated',
-      reference: nextPurchase.id
+      reference: nextPurchase.id,
+      originalQuantity: nextPurchase.originalQuantity,
+      originalUnit: nextPurchase.originalUnit,
+      convertedQuantity: nextPurchase.convertedQuantity,
+      convertedUnit: nextPurchase.convertedUnit,
+      warehouseCode: nextPurchase.warehouseCode,
     })
   }
 
@@ -215,7 +252,7 @@ async function deletePurchase(id) {
   await storeModel.writeStore(store)
   try {
     const Purchase = require('../models/Purchase')
-    await Purchase.deleteOne({ ...storeModel.tenantFilter(), id })
+    await Purchase.deleteOne(storeModel.branchScopedQuery({ id }))
   } catch (e) {
     console.error('Error deleting purchase from MongoDB:', e)
   }
@@ -249,6 +286,15 @@ function buildPurchaseRecord(body, store, index = 0) {
     category: body.category || 'Uncategorized',
     extractedText: body.extractedText || '',
     quantity,
+    originalQuantity: quantity,
+    originalUnit: normalizeUnitCode(body.unit || body.purchaseUnit || body.baseUnit || 'piece'),
+    convertedQuantity: quantity,
+    convertedUnit: normalizeUnitCode(body.baseUnit || body.unit || body.purchaseUnit || 'piece'),
+    warehouseCode: String(body.warehouseCode || body.defaultWarehouseCode || '').trim().toUpperCase(),
+    supplierId: String(body.supplierId || '').trim(),
+    batchNumber: String(body.batchNumber || '').trim(),
+    expiryDate: String(body.expiryDate || '').trim(),
+    serialNumber: String(body.serialNumber || '').trim(),
     unitPrice,
     inventoryPrice,
     payment,
@@ -273,6 +319,7 @@ function applyPurchaseToInventory(store, purchase) {
     existing.stock = Number(existing.stock || 0) + Number(purchase.quantity || 0)
     existing.capacity = Math.max(Number(existing.capacity || 0), Number(existing.stock || 0))
     existing.price = Number(purchase.inventoryPrice ?? purchase.unitPrice ?? existing.price ?? 0)
+    existing.purchasePrice = Number(purchase.inventoryPrice ?? purchase.unitPrice ?? existing.purchasePrice ?? existing.price ?? 0)
     existing.status = inventoryStatus(existing.stock)
     existing.extractedText = purchase.extractedText || existing.extractedText || ''
     return
@@ -281,12 +328,24 @@ function applyPurchaseToInventory(store, purchase) {
   store.inventory.unshift({
     date: purchase.date,
     item: purchase.item,
+    description: '',
     meta: 'Added from purchase',
     sku: purchase.sku || `SKU-${Date.now().toString().slice(-6)}`,
     category: purchase.category || 'Uncategorized',
+    itemType: 'raw_material',
+    baseUnit: purchase.convertedUnit || purchase.originalUnit || 'piece',
     stock: Number(purchase.quantity || 0),
     capacity: Math.max(Number(purchase.quantity || 0), 25),
     price: Number(purchase.inventoryPrice ?? purchase.unitPrice ?? 0),
+    purchasePrice: Number(purchase.inventoryPrice ?? purchase.unitPrice ?? 0),
+    sellingPrice: Number(purchase.inventoryPrice ?? purchase.unitPrice ?? 0),
+    defaultSupplierId: purchase.supplierId || '',
+    supplierOptions: purchase.supplier ? [{ supplierId: purchase.supplierId || '', supplierName: purchase.supplier, price: Number(purchase.unitPrice || 0), purchaseUnit: purchase.originalUnit || purchase.convertedUnit || 'piece' }] : [],
+    priceTiers: [],
+    defaultWarehouseCode: purchase.warehouseCode || '',
+    batchTracking: Boolean(purchase.batchNumber),
+    expiryTracking: Boolean(purchase.expiryDate),
+    serialTracking: false,
     status: inventoryStatus(purchase.quantity),
     serial: '',
     supplier: purchase.supplier,
@@ -295,6 +354,29 @@ function applyPurchaseToInventory(store, purchase) {
     leadTime: '',
     warranty: '',
   })
+}
+
+async function applyPurchaseUnitConversion(purchase, store, body = {}) {
+  const existing = findInventoryItem(store.inventory, purchase)
+  const originalQuantity = Number(purchase.originalQuantity ?? purchase.quantity)
+  const originalUnit = normalizeUnitCode(body.unit || body.purchaseUnit || purchase.originalUnit || existing?.baseUnit || body.baseUnit || 'piece')
+  const convertedUnit = normalizeUnitCode(existing?.baseUnit || body.baseUnit || purchase.convertedUnit || originalUnit)
+  const converted = existing
+    ? await convertItemQuantity(existing, originalQuantity, originalUnit)
+    : await convertQuantity({ quantity: originalQuantity, fromUnit: originalUnit, toUnit: convertedUnit, productSku: purchase.sku })
+  purchase.originalQuantity = originalQuantity
+  purchase.originalUnit = originalUnit
+  purchase.convertedQuantity = converted.quantity
+  purchase.convertedUnit = convertedUnit
+  purchase.quantity = converted.quantity
+  purchase.warehouseCode = String(body.warehouseCode || purchase.warehouseCode || existing?.defaultWarehouseCode || '').trim().toUpperCase()
+  purchase.supplierId = String(body.supplierId || purchase.supplierId || '').trim()
+  purchase.batchNumber = String(body.batchNumber || purchase.batchNumber || '').trim()
+  purchase.expiryDate = String(body.expiryDate || purchase.expiryDate || '').trim()
+  purchase.serialNumber = String(body.serialNumber || purchase.serialNumber || '').trim()
+  if (body.inventoryPrice === undefined && converted.quantity > 0) {
+    purchase.inventoryPrice = Number((Number(purchase.unitPrice || 0) * originalQuantity) / converted.quantity)
+  }
 }
 
 function findInventoryItem(inventory, entry) {

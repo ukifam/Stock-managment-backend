@@ -2,6 +2,7 @@ const PartnerTransfer = require('../models/PartnerTransfer')
 const storeModel = require('../models/storeModel')
 const httpError = require('../utils/httpError')
 const CacheManager = require('../utils/cache')
+const { auditActor } = require('../utils/tenantContext')
 
 async function listTransfers({ status = 'ALL', search = '' } = {}) {
   const query = {}
@@ -15,7 +16,7 @@ async function listTransfers({ status = 'ALL', search = '' } = {}) {
       { sku: { $regex: escaped, $options: 'i' } },
     ]
   }
-  const rows = await PartnerTransfer.find(storeModel.scopedQuery(query)).sort({ createdAt: -1 }).lean()
+  const rows = await PartnerTransfer.find(storeModel.branchScopedQuery(query)).sort({ createdAt: -1 }).lean()
   return {
     rows: rows.map(withBalance),
     count: rows.length,
@@ -36,7 +37,7 @@ async function receivePartnerStock(body = {}) {
 
   const reference = `TR-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
   const transfer = await PartnerTransfer.create({
-    ...storeModel.withTenantFields({
+    ...storeModel.withBranchFields({
       reference,
       partner,
       partnerPhone: String(body.partnerPhone || '').trim(),
@@ -60,14 +61,14 @@ async function sellTransferredStock(id, body = {}) {
   if (!Number.isInteger(quantity) || quantity <= 0) throw httpError(400, 'Sale quantity must be a positive whole number')
   if (!customer) throw httpError(400, 'Customer name is required')
 
-  const scope = storeModel.scopedQuery({ _id: id, status: 'OPEN' })
+  const scope = storeModel.branchScopedQuery({ _id: id, status: 'OPEN' })
   const transfer = await PartnerTransfer.findOneAndUpdate(
     {
       ...scope,
       $expr: { $lte: [{ $add: ['$quantitySold', '$quantityReturned', quantity] }, '$quantityReceived'] },
     },
-    { $inc: { quantitySold: quantity } },
-    { new: true, runValidators: true },
+    { $inc: { quantitySold: quantity }, $set: { updatedBy: auditActor() } },
+    { returnDocument: 'after', runValidators: true },
   )
   if (!transfer) throw httpError(400, 'Transfer is closed or does not have enough available quantity')
 
@@ -108,8 +109,8 @@ async function sellTransferredStock(id, body = {}) {
     }
     const updated = await PartnerTransfer.findOneAndUpdate(scope, {
       $push: { sales: saleRecord },
-      $set: { status: transfer.quantityReceived === transfer.quantitySold + transfer.quantityReturned ? 'CLOSED' : 'OPEN' },
-    }, { new: true })
+      $set: { status: transfer.quantityReceived === transfer.quantitySold + transfer.quantityReturned ? 'CLOSED' : 'OPEN', updatedBy: auditActor() },
+    }, { returnDocument: 'after' })
     CacheManager.clear()
     return { transfer: withBalance(updated.toObject()), sale }
   } catch (error) {
@@ -121,7 +122,7 @@ async function sellTransferredStock(id, body = {}) {
 async function returnTransferredStock(id, body = {}) {
   const quantity = Number(body.quantity)
   if (!Number.isInteger(quantity) || quantity <= 0) throw httpError(400, 'Return quantity must be a positive whole number')
-  const scope = storeModel.scopedQuery({ _id: id, status: 'OPEN' })
+  const scope = storeModel.branchScopedQuery({ _id: id, status: 'OPEN' })
   const updated = await PartnerTransfer.findOneAndUpdate(
     {
       ...scope,
@@ -130,14 +131,15 @@ async function returnTransferredStock(id, body = {}) {
     {
       $inc: { quantityReturned: quantity },
       $push: { returns: { quantity, date: body.date || new Date().toISOString().slice(0, 10), notes: String(body.notes || '').trim() } },
+      $set: { updatedBy: auditActor() },
     },
-    { new: true, runValidators: true },
+    { returnDocument: 'after', runValidators: true },
   )
   if (!updated) throw httpError(400, 'Transfer is closed or does not have enough available quantity to return')
   const transfer = withBalance(updated.toObject())
   if (transfer.remainingQuantity === 0) {
     transfer.status = 'CLOSED'
-    await PartnerTransfer.updateOne(scope, { $set: { status: 'CLOSED' } })
+    await PartnerTransfer.updateOne(scope, { $set: { status: 'CLOSED', updatedBy: auditActor() } })
   }
   CacheManager.clear()
   return transfer
