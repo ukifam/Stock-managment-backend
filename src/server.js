@@ -3,6 +3,7 @@ require('dotenv').config()
 const app = require('./app')
 const connectDB = require('./config/db')
 const storeModel = require('./models/storeModel')
+const { startWeeklyReportScheduler } = require('./services/weeklyReportScheduler')
 
 const PORT = Number(process.env.PORT || 5000)
 
@@ -22,6 +23,7 @@ if (process.argv.includes('--check')) {
 async function startServer() {
   await connectDB()
   await storeModel.ensureStore()
+  startWeeklyReportScheduler()
 
   app.listen(PORT, () => {
     console.log(`Stock backend running on http://localhost:${PORT}`)
