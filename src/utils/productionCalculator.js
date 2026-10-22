@@ -78,6 +78,8 @@ function calculateProductionPlan(recipe, inventory = [], configuration = {}, tar
     productSku: String(recipe?.productSku || ''),
     productName: String(recipe?.productName || ''),
     productUnit: String(recipe?.productUnit || 'piece'),
+    servingSize: positiveNumber(recipe?.servingSize, 0),
+    servingUnit: String(recipe?.servingUnit || ''),
     plannedQuantity,
     yieldQuantity,
     batches: round(batches),

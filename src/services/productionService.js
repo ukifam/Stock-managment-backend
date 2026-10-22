@@ -180,6 +180,8 @@ async function createProductionOrder(payload = {}) {
     productSku: recipe.productSku,
     productName: recipe.productName,
     productUnit: recipe.productUnit,
+    servingSize: recipe.servingSize || 0,
+    servingUnit: recipe.servingUnit || '',
     plannedQuantity: plan.plannedQuantity,
     status: payload.submitForApproval ? 'PENDING_APPROVAL' : 'DRAFT',
     warehouseCode: String(payload.warehouseCode || '').trim().toUpperCase(),
@@ -871,7 +873,7 @@ function buildRecipe(payload, fallback = {}) {
   if (!productName || yieldQuantity <= 0) throw httpError(400, 'Product name and yield quantity are required')
   const materials = normalizeMaterials(payload.materials ?? fallback.materials)
   if (materials.length === 0) throw httpError(400, 'Add at least one material or packaging requirement to the recipe')
-  return { productName, productSku, productUnit: String(payload.productUnit || fallback.productUnit || 'piece').trim() || 'piece', versionLabel: String(payload.versionLabel ?? fallback.versionLabel ?? '').trim(), sellingPrice: positiveNumber(payload.sellingPrice ?? fallback.sellingPrice, 0), yieldQuantity, expectedWastePercent: normalizePercent(payload.expectedWastePercent ?? fallback.expectedWastePercent, 'Expected recipe waste'), materials, labor: normalizeTimedAssignments(payload.labor ?? fallback.labor), machines: normalizeTimedAssignments(payload.machines ?? fallback.machines), utilities: normalizeUtilityAssignments(payload.utilities ?? fallback.utilities), processSteps: normalizeProcessSteps(payload.processSteps ?? fallback.processSteps), processId: String(payload.processId ?? fallback.processId ?? '').trim(), notes: String((payload.notes ?? fallback.notes) || '').trim() }
+  return { productName, productSku, productUnit: String(payload.productUnit || fallback.productUnit || 'piece').trim() || 'piece', servingSize: positiveNumber(payload.servingSize ?? fallback.servingSize, 0), servingUnit: String(payload.servingUnit ?? fallback.servingUnit ?? '').trim(), versionLabel: String(payload.versionLabel ?? fallback.versionLabel ?? '').trim(), sellingPrice: positiveNumber(payload.sellingPrice ?? fallback.sellingPrice, 0), yieldQuantity, expectedWastePercent: normalizePercent(payload.expectedWastePercent ?? fallback.expectedWastePercent, 'Expected recipe waste'), materials, labor: normalizeTimedAssignments(payload.labor ?? fallback.labor), machines: normalizeTimedAssignments(payload.machines ?? fallback.machines), utilities: normalizeUtilityAssignments(payload.utilities ?? fallback.utilities), processSteps: normalizeProcessSteps(payload.processSteps ?? fallback.processSteps), processId: String(payload.processId ?? fallback.processId ?? '').trim(), notes: String((payload.notes ?? fallback.notes) || '').trim() }
 }
 
 function buildProcess(payload, fallback = {}) {

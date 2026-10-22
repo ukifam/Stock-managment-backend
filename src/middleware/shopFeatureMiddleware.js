@@ -6,7 +6,7 @@ function shopFeatureMiddleware(feature) {
     try {
       const action = actionForRequest(req)
       if (await hasPermission(req.user, feature, action)) return next()
-      return next(httpError(403, `You do not have permission to ${action} this module`))
+      return next(httpError(403, `You do not have permission to ${action} this module. Please contact the owner of this task and ask them to do it.`))
     } catch (error) {
       next(error)
     }

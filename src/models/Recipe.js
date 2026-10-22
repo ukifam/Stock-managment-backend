@@ -70,6 +70,8 @@ const recipeSchema = new mongoose.Schema(
     approvedBy: { id: String, username: String, email: String },
     sellingPrice: { type: Number, default: 0, min: 0 },
     yieldQuantity: { type: Number, required: true, min: 0 },
+    servingSize: { type: Number, default: 0, min: 0 },
+    servingUnit: { type: String, default: '' },
     expectedWastePercent: { type: Number, default: 0, min: 0 },
     materials: { type: [materialSchema], default: [] },
     labor: { type: [resourceAssignmentSchema], default: [] },

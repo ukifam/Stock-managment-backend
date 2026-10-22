@@ -5,7 +5,7 @@ const { hasPermission } = require('../services/accessRoleService')
 async function requireProductionApproval(req, _res, next) {
   try {
     if (await hasPermission(req.user, 'production', 'approve')) return next()
-    return next(Object.assign(new Error('You do not have permission to approve production records'), { status: 403 }))
+    return next(Object.assign(new Error('You do not have permission to approve production records. Please contact the owner of this task and ask them to do it.'), { status: 403 }))
   } catch (error) {
     next(error)
   }
@@ -14,7 +14,7 @@ async function requireProductionApproval(req, _res, next) {
 async function requireProductionView(req, _res, next) {
   try {
     if (await hasPermission(req.user, 'production', 'view')) return next()
-    return next(Object.assign(new Error('You do not have permission to view production waste records'), { status: 403 }))
+    return next(Object.assign(new Error('You do not have permission to view production waste records. Please contact the owner of this task and ask them to do it.'), { status: 403 }))
   } catch (error) {
     next(error)
   }
@@ -25,7 +25,7 @@ async function requireQualityPermission(req, _res, next) {
     const outcome = String(req.body?.result || '').trim().toUpperCase()
     const action = ['REWORK', 'REJECT', 'REJECTED'].includes(outcome) ? 'approve' : 'create'
     if (await hasPermission(req.user, 'quality', action)) return next()
-    return next(Object.assign(new Error(`You do not have permission to ${action} quality records`), { status: 403 }))
+    return next(Object.assign(new Error(`You do not have permission to ${action} quality records. Please contact the owner of this task and ask them to do it.`), { status: 403 }))
   } catch (error) {
     next(error)
   }

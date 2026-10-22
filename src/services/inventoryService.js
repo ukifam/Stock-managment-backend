@@ -243,6 +243,7 @@ function buildInventoryRecord(body, store, index = 0) {
     category: body.category,
     itemType: body.itemType || 'raw_material',
     baseUnit: normalizeUnitCode(body.baseUnit || 'piece'),
+    measurementAmount: parseQuantity(body.measurementAmount, 1),
     stock,
     capacity: parseQuantity(body.capacity ?? body.maxstock, Math.max(stock, 25)),
     minimumStock: parseQuantity(body.minimumStock ?? body.minstock, 0),

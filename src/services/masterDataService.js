@@ -135,6 +135,11 @@ async function normalizeItemPayload(payload = {}, partial = false) {
       result[field] = value
     }
   }
+  if (result.measurementAmount !== undefined) {
+    const amount = Number(result.measurementAmount)
+    if (!Number.isFinite(amount) || amount <= 0) throw httpError(400, 'measurementAmount must be greater than zero')
+    result.measurementAmount = amount
+  }
   if (result.maximumStock !== undefined) result.capacity = result.maximumStock
   if (result.sellingPrice !== undefined) result.price = result.sellingPrice
   return result
@@ -149,6 +154,7 @@ function serializeItem(item) {
     category: item.category,
     itemType: item.itemType || 'raw_material',
     baseUnit: item.baseUnit || 'piece',
+    measurementAmount: Number(item.measurementAmount || 1),
     status: item.status || 'Active',
     stock: Number(item.stock || 0),
     minimumStock: Number(item.minimumStock || 0),
