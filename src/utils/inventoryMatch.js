@@ -25,6 +25,35 @@ function findInventoryItem(inventory, entry) {
   return partial.length === 1 ? partial[0] : undefined
 }
 
+function nameWords(name) {
+  return new Set(normalizeText(name).split(' ').filter(Boolean).map((word) => (word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word)))
+}
+
+// Matches a recipe material to stock: exact name first, otherwise every word of one
+// name must appear in the other ("Fresh milk" ~ "Milk"), and only if unambiguous.
+function matchByName(rows, name) {
+  const list = Array.isArray(rows) ? rows : []
+  const wanted = normalizeText(name)
+  if (!wanted) return undefined
+  const exact = list.find((row) => normalizeText(row.item) === wanted)
+  if (exact) return exact
+  const wantedWords = nameWords(wanted)
+  const contains = (outer, inner) => inner.size > 0 && [...inner].every((word) => outer.has(word))
+  const candidates = list.filter((row) => {
+    const have = nameWords(row.item)
+    return contains(have, wantedWords) || contains(wantedWords, have)
+  })
+  return candidates.length === 1 ? candidates[0] : undefined
+}
+
+const FINISHED_TYPES = ['finished_product', 'semi_finished_product', 'finished_good']
+const FINISHED_CATEGORIES = ['finished goods', 'finished good', 'finished product', 'finished products']
+
+function isFinishedProduct(row = {}) {
+  return FINISHED_TYPES.includes(String(row.itemType || '').trim().toLowerCase())
+    || FINISHED_CATEGORIES.includes(String(row.category || '').trim().toLowerCase())
+}
+
 function inventoryStatus(stock, item = {}) {
   const count = Number(stock || 0)
   if (count <= 0) return 'Out of Stock'
@@ -42,4 +71,4 @@ function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-module.exports = { escapeRegex, findInventoryItem, inventoryStatus, isSellableStatus, normalizeText }
+module.exports = { escapeRegex, findInventoryItem, inventoryStatus, isFinishedProduct, isSellableStatus, matchByName, normalizeText }

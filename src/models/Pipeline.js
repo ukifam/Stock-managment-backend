@@ -88,6 +88,15 @@ const pipelineSchema = new mongoose.Schema({
   rawMaterialsStored: { type: Boolean, default: false },
   finishedGoodsStored: { type: Boolean, default: false },
   finishedGoodsLocation: { type: String, default: '' },
+  // Order → stock check → purchase order → payment → receive → make → quality → store
+  skippedStages: { type: [String], default: [] },
+  requisition: { type: mongoose.Schema.Types.Mixed, default: null },
+  purchaseOrder: { type: mongoose.Schema.Types.Mixed, default: null },
+  payment: { type: mongoose.Schema.Types.Mixed, default: null },
+  receipts: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  production: { type: mongoose.Schema.Types.Mixed, default: null },
+  storage: { type: mongoose.Schema.Types.Mixed, default: null },
+  lockedAt: { type: Date, default: null },
   createdAt: { type: String, default: '' },
   updatedAt: { type: String, default: '' },
 }, { timestamps: true })

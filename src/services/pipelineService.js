@@ -1,56 +1,45 @@
 const Pipeline = require('../models/Pipeline')
 const storeModel = require('../models/storeModel')
 const { auditActor, withBranchFields, branchScopedQuery } = require('../utils/tenantContext')
+const { normalizeStage, planFields, serializePipeline } = require('./pipelineWorkflowService')
 
 async function listPipelines() {
   await storeModel.ensureStore()
-  return Pipeline.find(branchScopedQuery()).sort({ updatedAt: -1, createdAt: -1 }).lean()
+  const rows = await Pipeline.find(branchScopedQuery()).sort({ updatedAt: -1, createdAt: -1 }).lean()
+  return rows.map(serializePipeline)
 }
 
+// Clients may only edit the order (plan) before it is submitted; every later step
+// goes through the workflow endpoints so stock and money stay consistent.
 async function upsertPipeline(payload = {}) {
   await storeModel.ensureStore()
   if (!payload.id) throw Object.assign(new Error('Pipeline id is required'), { status: 400 })
 
   const actor = auditActor()
-  const data = {
-    id: payload.id,
-    productName: String(payload.productName || '').trim(),
-    businessType: String(payload.businessType || '').trim(),
-    singleUnitLabel: String(payload.singleUnitLabel || 'unit').trim(),
-    ingredients: Array.isArray(payload.ingredients) ? payload.ingredients : [],
-    targetQuantity: Number(payload.targetQuantity) || 1,
-    scheduledDate: String(payload.scheduledDate || '').trim(),
-    currentStage: String(payload.currentStage || 'plan').trim(),
-    completedStages: Array.isArray(payload.completedStages) ? payload.completedStages : [],
-    executionMode: String(payload.executionMode || 'delegated').trim(),
-    activityLog: Array.isArray(payload.activityLog) ? payload.activityLog : [],
-    totalIngredients: Array.isArray(payload.totalIngredients) ? payload.totalIngredients : [],
-    totalMaterialCost: Number(payload.totalMaterialCost) || 0,
-    purchasedItems: Array.isArray(payload.purchasedItems) ? payload.purchasedItems : [],
-    producedQuantity: Number(payload.producedQuantity) || 0,
-    productionStartTime: String(payload.productionStartTime || '').trim(),
-    productionEndTime: String(payload.productionEndTime || '').trim(),
-    productionNotes: String(payload.productionNotes || '').trim(),
-    qualityResult: payload.qualityResult || null,
-    sellingPricePerUnit: Number(payload.sellingPricePerUnit) || 0,
-    sales: Array.isArray(payload.sales) ? payload.sales : [],
-    rawMaterialsStored: Boolean(payload.rawMaterialsStored),
-    finishedGoodsStored: Boolean(payload.finishedGoodsStored),
-    finishedGoodsLocation: String(payload.finishedGoodsLocation || '').trim(),
-    createdAt: String(payload.createdAt || new Date().toISOString()),
-    updatedAt: new Date().toISOString(),
-    updatedBy: actor,
+  const executionMode = payload.executionMode === 'solo' ? 'solo' : 'delegated'
+  const existing = await Pipeline.findOne(branchScopedQuery({ id: payload.id }))
+
+  if (existing) {
+    existing.executionMode = executionMode
+    if (normalizeStage(existing.currentStage) === 'plan') Object.assign(existing, planFields(payload))
+    existing.updatedAt = new Date().toISOString()
+    existing.updatedBy = actor
+    await existing.save()
+    return serializePipeline(existing)
   }
 
-  const existing = await Pipeline.findOne(branchScopedQuery({ id: payload.id }))
-  if (existing) {
-    Object.assign(existing, data)
-    await existing.save()
-    return existing.toObject()
-  } else {
-    const created = await Pipeline.create(withBranchFields({ ...data, createdBy: actor }))
-    return created.toObject()
-  }
+  const created = await Pipeline.create(withBranchFields({
+    id: payload.id,
+    ...planFields(payload),
+    executionMode,
+    currentStage: 'plan',
+    completedStages: [],
+    createdAt: String(payload.createdAt || new Date().toISOString()),
+    updatedAt: new Date().toISOString(),
+    createdBy: actor,
+    updatedBy: actor,
+  }))
+  return serializePipeline(created)
 }
 
 async function bulkUpsertPipelines(pipelines = []) {

@@ -40,4 +40,36 @@ async function deletePipeline(req, res, next) {
   }
 }
 
-module.exports = { listPipelines, upsertPipeline, bulkUpsertPipelines, deletePipeline }
+const workflow = require('../services/pipelineWorkflowService')
+
+const STEPS = {
+  submit: (req) => workflow.submitOrder(req.params.id, req.body, req.user),
+  'check-stock': (req) => workflow.checkStock(req.params.id, req.user),
+  recheck: (req) => workflow.recheckStock(req.params.id, req.user),
+  'purchase-order': (req) => workflow.createPurchaseOrder(req.params.id, req.body, req.user),
+  pay: (req) => workflow.payPurchaseOrder(req.params.id, req.body, req.user),
+  receive: (req) => workflow.receiveGoods(req.params.id, req.body, req.user),
+  make: (req) => workflow.makeProducts(req.params.id, req.body, req.user),
+  quality: (req) => workflow.checkQuality(req.params.id, req.body, req.user),
+  store: (req) => workflow.storeProducts(req.params.id, req.body, req.user),
+}
+
+function runStep(name) {
+  return async (req, res, next) => {
+    try {
+      res.json({ pipeline: await STEPS[name](req) })
+    } catch (err) {
+      next(err)
+    }
+  }
+}
+
+async function getStockCheck(req, res, next) {
+  try {
+    res.json(await workflow.getStockCheck(req.params.id))
+  } catch (err) {
+    next(err)
+  }
+}
+
+module.exports = { listPipelines, upsertPipeline, bulkUpsertPipelines, deletePipeline, runStep, getStockCheck }

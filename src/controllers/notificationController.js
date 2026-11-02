@@ -2,10 +2,11 @@ const Notification = require('../models/Notification')
 const User = require('../models/User')
 const Business = require('../models/Business')
 const { sendProductionActivityEmail } = require('../services/notificationMailer')
+const { currentTenant } = require('../utils/tenantContext')
 
 async function listNotifications(req, res, next) {
   try {
-    const ownerKey = req.user.ownerKey
+    const ownerKey = currentTenant().ownerKey
     const limit = Math.min(Number(req.query.limit || 50), 100)
     const filter = { ownerKey }
     if (req.query.unread === 'true') {
@@ -32,7 +33,7 @@ async function markAsRead(req, res, next) {
   try {
     const { id } = req.params
     const notification = await Notification.findOneAndUpdate(
-      { _id: id, ownerKey: req.user.ownerKey },
+      { _id: id, ownerKey: currentTenant().ownerKey },
       { read: true },
       { new: true }
     )
@@ -47,7 +48,7 @@ async function markAsRead(req, res, next) {
 
 async function markAllAsRead(req, res, next) {
   try {
-    await Notification.updateMany({ ownerKey: req.user.ownerKey, read: false }, { read: true })
+    await Notification.updateMany({ ownerKey: currentTenant().ownerKey, read: false }, { read: true })
     res.json({ success: true, message: 'All notifications marked as read' })
   } catch (error) {
     next(error)
@@ -68,7 +69,7 @@ async function recordPipelineActivity(req, res, next) {
     } = req.body
 
     const currentUser = req.user
-    const ownerKey = currentUser.ownerKey
+    const ownerKey = currentTenant().ownerKey
 
     // 1. Locate the Shop Admin / Owner email
     let adminEmail = currentUser.ownerEmail || ''

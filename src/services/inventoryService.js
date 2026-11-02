@@ -8,7 +8,7 @@ const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
 const stockMovementService = require('./stockMovementService')
 const { assertUnitExists, normalizeUnitCode } = require('./unitConversionService')
-const { inventoryStatus } = require('../utils/inventoryMatch')
+const { inventoryStatus, isFinishedProduct } = require('../utils/inventoryMatch')
 
 const PROTECTED_FIELDS = ['_id', '__v', 'ownerKey', 'ownerEmail', 'branchCode', 'createdBy', 'createdAt', 'updatedAt', 'sku', 'stock', 'rawStock', 'rawCapacity', 'rawPrice']
 
@@ -19,13 +19,13 @@ const PROTECTED_FIELDS = ['_id', '__v', 'ownerKey', 'ownerEmail', 'branchCode', 
  * - Caching: stores results for 60 seconds
  * - Indexing: database queries use indexes on category, status, date
  */
-async function listInventory({ period = 'yearly', search = '', page = 1, limit = 50, category = '', status = '' }) {
+async function listInventory({ period = 'yearly', search = '', page = 1, limit = 50, category = '', status = '', kind = '' }) {
   // Validate pagination params
   const pageNum = Math.max(1, parseInt(page, 10) || 1)
   const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10) || 50))
 
   // Create cache key based on all filter parameters (period ignored — inventory is current stock, not time-series)
-  const cacheKey = `inventory:list:${search}:${pageNum}:${limitNum}:${category}:${status}`
+  const cacheKey = `inventory:list:${search}:${pageNum}:${limitNum}:${category}:${status}:${kind}`
   const cached = CacheManager.get(cacheKey)
   if (cached) {
     return cached
@@ -33,6 +33,14 @@ async function listInventory({ period = 'yearly', search = '', page = 1, limit =
 
   const store = await storeModel.readStore()
   let rows = store.inventory
+  const kindCounts = {
+    products: rows.filter(isFinishedProduct).length,
+    materials: rows.filter((row) => !isFinishedProduct(row)).length,
+  }
+
+  // Processing shops split finished products from the materials used to make them
+  if (kind === 'products') rows = rows.filter(isFinishedProduct)
+  if (kind === 'materials') rows = rows.filter((row) => !isFinishedProduct(row))
 
   // Apply category filter if provided
   if (category) {
@@ -59,6 +67,7 @@ async function listInventory({ period = 'yearly', search = '', page = 1, limit =
   const result = {
     rows: paginatedRows.map((row) => inventoryDto(row, currency)),
     count: totalCount,
+    kindCounts,
     page: pageNum,
     pageSize: limitNum,
     totalPages,
