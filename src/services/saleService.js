@@ -13,6 +13,7 @@ const warehouseStockService = require('./warehouseStockService')
 const Customer = require('../models/Customer')
 const SaleReturn = require('../models/SaleReturn')
 const { auditActor } = require('../utils/tenantContext')
+const { findInventoryItem, inventoryStatus, isSellableStatus } = require('../utils/inventoryMatch')
 
 /**
  * List sales with pagination, filtering, and caching
@@ -31,7 +32,7 @@ async function listSales({ period = 'yearly', search = '', page = 1, limit = 50,
   let rows = from || to ? filterByRange(store.sales, from, to) : filterByPeriod(store.sales, period)
 
   if (status) {
-    rows = rows.filter((row) => row.status.toLowerCase() === status.toLowerCase())
+    rows = rows.filter((row) => String(row.status || '').toLowerCase() === status.toLowerCase())
   }
 
   if (search) {
@@ -66,9 +67,11 @@ function normalizePaymentMethod(value) {
     ['mobile money', 'Mobile Money'],
     ['momo', 'Mobile Money'],
     ['credit', 'Credit'],
+    ['bank transfer', 'Bank Transfer'],
+    ['bank', 'Bank Transfer'],
   ])
   const method = methods.get(normalized)
-  if (!method) throw httpError(400, 'Payment method must be cash, card, mobile money, or credit')
+  if (!method) throw httpError(400, 'Payment method must be cash, card, mobile money, bank transfer, or credit')
   return method
 }
 
@@ -161,7 +164,7 @@ async function createSale(body, options = {}) {
         purchasePrice: parseMoney(sItem.costBasis ?? sItem.unitCost ?? 0),
         status: 'Active',
       }
-      store.inventory.unshift(invItem)
+      if (!options.stockAlreadyDeducted) store.inventory.unshift(invItem)
     }
     if (!invItem) {
       throw httpError(404, `Product not found in inventory: ${sItem.item || sItem.sku}`)
@@ -216,14 +219,14 @@ async function createSale(body, options = {}) {
   if (!options.stockAlreadyDeducted) {
     for (const { invItem, quantity, prevStock } of requestedByInventoryItem.values()) {
       invItem.stock = Math.max(0, prevStock - quantity)
-      invItem.status = inventoryStatus(invItem.stock)
+      invItem.status = inventoryStatus(invItem.stock, invItem)
     }
   }
 
   const { subtotal, discount, tax, total, netRevenue, costOfGoodsSold, grossProfit, grossMarginPercent } =
     calculateSaleFinancials(saleItems, body.discount, body.tax)
   const payment = normalizePaymentMethod(body.payment || 'Cash')
-  const paidAmount = resolvePaidAmount(body, total, payment, total)
+  const paidAmount = resolvePaidAmount(body, total, payment, 0)
   const outstanding = resolveOutstanding(body, total, paidAmount, payment, Math.max(0, total - paidAmount))
   await validateCustomerCredit(body, store, outstanding)
 
@@ -326,11 +329,6 @@ async function createSale(body, options = {}) {
   return saleDto(sale, currencyFromSettings(store.settings))
 }
 
-function positiveQuantity(value) {
-  const quantity = Number(value)
-  return Number.isFinite(quantity) && quantity > 0 ? quantity : 1
-}
-
 function saleQuantity(value) {
   if (value === undefined || value === null || value === '') return 1
   const quantity = Number(value)
@@ -396,7 +394,11 @@ async function bulkImportSales(bodies) {
   }
 }
 
-async function updateSaleStatus(id, status) {
+const ALLOWED_STATUSES = ['Pending', 'Given', 'Returned', 'Completed', 'Cancelled']
+
+async function updateSaleStatus(id, requestedStatus) {
+  const status = ALLOWED_STATUSES.find((value) => value.toLowerCase() === String(requestedStatus || '').trim().toLowerCase())
+  if (!status) throw httpError(400, `Status must be one of: ${ALLOWED_STATUSES.join(', ')}`)
   const store = await storeModel.readStore()
   const index = store.sales.findIndex((sale) => sale.id === id)
   if (index === -1) throw httpError(404, 'Sale not found')
@@ -415,64 +417,83 @@ async function updateSaleStatus(id, status) {
 }
 
 async function updateSale(id, body) {
-  const missing = required(body, ['customer', 'item'])
-  if (missing.length) throw httpError(400, 'Missing required fields', { fields: missing })
-
   const store = await storeModel.readStore()
   const index = store.sales.findIndex((sale) => sale.id === id)
   if (index === -1) throw httpError(404, 'Sale not found')
 
   const previousSale = store.sales[index]
-  const quantity = parseQuantity(body.quantity ?? body.items, previousSale.quantity)
-  const value = parseMoney(body.value ?? body.total ?? previousSale.value, previousSale.value)
-  const payment = body.payment || previousSale.payment || 'Cash'
+  const isMultiItem = Array.isArray(previousSale.items) && previousSale.items.length > 1
+  const customer = String(body.customer ?? previousSale.customer ?? '').trim()
+  if (!customer) throw httpError(400, 'Missing required fields', { fields: ['customer'] })
+  if (!isMultiItem && !String(body.item ?? previousSale.item ?? '').trim()) {
+    throw httpError(400, 'Missing required fields', { fields: ['item'] })
+  }
+
+  const quantity = isMultiItem ? previousSale.quantity : parseQuantity(body.quantity ?? body.items, previousSale.quantity)
+  const value = isMultiItem ? previousSale.value : parseMoney(body.value ?? body.total ?? previousSale.value, previousSale.value)
+  const payment = normalizePaymentMethod(body.payment || previousSale.payment || 'Cash')
   const paidAmount = resolvePaidAmount(body, value, payment, previousSale.paidAmount)
-  const outstanding = resolveOutstanding(body, value, paidAmount, payment, previousSale.outstanding)
+  const outstanding = resolveOutstanding(body, value, paidAmount, payment, Math.max(0, value - paidAmount))
 
   const nextSale = {
     ...previousSale,
     date: body.date || previousSale.date,
     id: body.id || previousSale.id,
-    customer: body.customer,
-    phone: body.phone || '',
-    item: body.item,
-    sku: body.sku || previousSale.sku || '',
-    category: body.category || previousSale.category || 'Uncategorized',
+    customer,
+    phone: body.phone ?? previousSale.phone ?? '',
     extractedText: body.extractedText ?? previousSale.extractedText ?? '',
-    quantity,
-    value,
     payment,
     paidAmount,
     outstanding,
     status: body.status || saleStatus(payment, outstanding),
   }
 
+  if (!isMultiItem) {
+    Object.assign(nextSale, {
+      item: body.item ?? previousSale.item,
+      sku: body.sku || previousSale.sku || '',
+      category: body.category || previousSale.category || 'Uncategorized',
+      quantity,
+      value,
+    })
+    // Keep the stored line item and financials consistent with the edited totals.
+    const unitCost = Number(previousSale.items?.[0]?.costBasis ?? 0)
+    const unitPrice = quantity > 0 ? value / quantity : 0
+    const line = { ...(previousSale.items?.[0] || {}), sku: nextSale.sku, item: nextSale.item, category: nextSale.category, quantity, unitPrice, total: value, costBasis: unitCost }
+    line.costOfGoodsSold = round(quantity * unitCost)
+    line.grossProfit = round(value - line.costOfGoodsSold)
+    nextSale.items = [line]
+    Object.assign(nextSale, calculateSaleFinancials([line], 0, 0), { value })
+  }
+
   if (nextSale.id !== previousSale.id && store.sales.some((sale, saleIndex) => saleIndex !== index && sale.id === nextSale.id)) {
     throw httpError(409, 'Sale ID already exists')
   }
 
-  removeSaleFromInventory(store, previousSale)
+  const quantityChanged = !isMultiItem && (nextSale.quantity !== previousSale.quantity || findInventoryItem(store.inventory, nextSale) !== findInventoryItem(store.inventory, previousSale))
+  if (quantityChanged) {
+    removeSaleFromInventory(store, previousSale)
+    applySaleToInventory(store, nextSale)
+  }
   store.sales[index] = nextSale
-  applySaleToInventory(store, nextSale)
   await storeModel.writeStore(store)
 
-  const existing = findInventoryItem(store.inventory, nextSale)
+  const existing = quantityChanged ? findInventoryItem(store.inventory, nextSale) : null
   if (existing) {
+    const delta = nextSale.quantity - previousSale.quantity
     await stockMovementService.recordMovement({
       date: nextSale.date,
       sku: existing.sku,
-      type: 'ADJUSTMENT', // Treat as adjustment for update to keep simple
-      quantity: -(nextSale.quantity - previousSale.quantity),
-      previousStock: existing.stock + (nextSale.quantity - previousSale.quantity),
+      type: 'ADJUSTMENT',
+      quantity: -delta,
+      previousStock: existing.stock + delta,
       newStock: existing.stock,
-      reason: 'Sale updated',
-      reference: nextSale.id
+      reason: `Sale ${nextSale.id} updated`,
+      reference: nextSale.id,
     })
   }
 
-  // Clear caches after updating
   CacheManager.clear()
-
   return saleDto(nextSale, currencyFromSettings(store.settings))
 }
 
@@ -489,7 +510,7 @@ async function getAvailableItems() {
 
   const store = await storeModel.readStore()
   const availableItems = store.inventory
-    .filter((item) => Number(item.stock || 0) > 0 && item.status === 'Active')
+    .filter((item) => Number(item.stock || 0) > 0 && isSellableStatus(item.status))
     .map((item) => ({
       sku: item.sku,
       item: item.item,
@@ -643,18 +664,38 @@ async function deleteSale(id) {
   const index = store.sales.findIndex((row) => row.id === id)
   if (index === -1) throw httpError(404, 'Sale not found')
 
-  store.sales.splice(index, 1)
+  const [sale] = store.sales.splice(index, 1)
+  const lines = Array.isArray(sale.items) && sale.items.length ? sale.items : [{ sku: sale.sku, item: sale.item, quantity: sale.quantity }]
+  const restored = []
+  for (const line of lines) {
+    const inventoryItem = findInventoryItem(store.inventory, line)
+    const quantity = Number(line.quantity || 0)
+    if (!inventoryItem || quantity <= 0) continue
+    const previousStock = Number(inventoryItem.stock || 0)
+    inventoryItem.stock = previousStock + quantity
+    inventoryItem.status = inventoryStatus(inventoryItem.stock, inventoryItem)
+    restored.push({ inventoryItem, quantity, previousStock })
+  }
+
   await storeModel.writeStore(store)
-  try {
-    const Sale = require('../models/Sale')
-    await Sale.deleteOne(storeModel.branchScopedQuery({ id }))
-  } catch (e) {
-    console.error('Error deleting sale from MongoDB:', e)
+  const Sale = require('../models/Sale')
+  await Sale.deleteOne(sale._id ? { _id: sale._id } : storeModel.branchScopedQuery({ id }))
+
+  for (const { inventoryItem, quantity, previousStock } of restored) {
+    await stockMovementService.recordMovement({
+      sku: inventoryItem.sku,
+      type: 'ADJUSTMENT',
+      quantity,
+      previousStock,
+      newStock: previousStock + quantity,
+      reason: `Sale ${id} deleted; stock restored`,
+      reference: id,
+      warehouseCode: sale.warehouseCode || inventoryItem.defaultWarehouseCode || '',
+    })
   }
   CacheManager.clear()
   return { success: true, id }
 }
-
 
 function buildSaleRecord(body, store, index = 0) {
   const quantity = parseQuantity(body.quantity ?? body.items, 1)
@@ -692,7 +733,7 @@ function removeSaleFromInventory(store, sale) {
   if (!existing) return
 
   existing.stock = Number(existing.stock || 0) + Number(sale.quantity || 0)
-  existing.status = inventoryStatus(existing.stock)
+  existing.status = inventoryStatus(existing.stock, existing)
 }
 
 function applySaleToInventory(store, sale) {
@@ -710,35 +751,7 @@ function applySaleToInventory(store, sale) {
   sale.category = existing.category || sale.category
   sale.item = existing.item || sale.item
   existing.stock = currentStock - saleQuantity
-  existing.status = inventoryStatus(existing.stock)
-}
-
-function findInventoryItem(inventory, entry) {
-  const sku = normalizeText(entry.sku)
-  const item = normalizeText(entry.item)
-
-  return inventory.find((row) => {
-    const rowSku = normalizeText(row.sku)
-    const rowItem = normalizeText(row.item)
-    return (sku && rowSku === sku) || itemMatches(rowItem, item)
-  })
-}
-
-function normalizeText(value) {
-  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ')
-}
-
-function itemMatches(rowItem, item) {
-  if (!rowItem || !item) return false
-  if (rowItem === item) return true
-  return rowItem.includes(item) || item.includes(rowItem)
-}
-
-function inventoryStatus(stock) {
-  const count = Number(stock || 0)
-  if (count <= 0) return 'Out of Stock'
-  if (count <= 5) return 'Low'
-  return 'Active'
+  existing.status = inventoryStatus(existing.stock, existing)
 }
 
 function isCreditPayment(payment) {

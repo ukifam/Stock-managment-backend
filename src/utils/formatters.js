@@ -37,9 +37,10 @@ function purchaseDto(row, currency) {
           sku: row.sku || '',
           item: row.item || 'General Purchase',
           category: row.category || 'General',
-          quantity: Number(row.quantity || 1),
+          quantity: Number(row.originalQuantity ?? row.quantity ?? 1),
+          unit: row.originalUnit || '',
           unitPrice: Number(row.unitPrice || row.value || 0),
-          total: Number(row.value || (Number(row.quantity || 1) * Number(row.unitPrice || 0))),
+          total: Number(row.value || (Number(row.originalQuantity ?? row.quantity ?? 1) * Number(row.unitPrice || 0))),
         },
       ]
 

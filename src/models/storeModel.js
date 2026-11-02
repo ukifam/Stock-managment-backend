@@ -196,7 +196,8 @@ async function dropIndexIfExists(model, indexName) {
       await model.collection.dropIndex(indexName)
     }
   } catch (error) {
-    if (error.codeName !== 'IndexNotFound' && error.code !== 27) {
+    // 27 = IndexNotFound, 26 = NamespaceNotFound (the collection does not exist yet on a fresh database).
+    if (!['IndexNotFound', 'NamespaceNotFound'].includes(error.codeName) && ![26, 27].includes(error.code)) {
       throw error
     }
   }

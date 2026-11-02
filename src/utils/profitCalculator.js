@@ -30,12 +30,28 @@ function addCostEntry(totals, key, quantity, unitPrice) {
   totals.set(key, entry)
 }
 
+// Purchases store quantity in the item's base unit while unitPrice is per purchase unit.
+function purchaseTotal(purchase = {}) {
+  const stored = Number(purchase.value || purchase.subtotal || 0)
+  if (stored > 0) return stored
+  const quantity = Number(purchase.originalQuantity ?? purchase.quantity ?? 0)
+  return quantity * Number(purchase.unitPrice || 0)
+}
+
+function purchaseBaseUnitCost(purchase = {}) {
+  const quantity = Number(purchase.quantity || 0)
+  if (purchase.inventoryPrice !== undefined && purchase.inventoryPrice !== null && purchase.inventoryPrice !== '') {
+    return Number(purchase.inventoryPrice) || 0
+  }
+  return quantity > 0 ? purchaseTotal(purchase) / quantity : Number(purchase.unitPrice || 0)
+}
+
 function buildAverageUnitCostIndex(purchases, inventory = []) {
   const totals = new Map()
 
   purchases.forEach((purchase) => {
     const qty = Number(purchase.quantity || 0)
-    const unitPrice = Number(purchase.unitPrice || 0)
+    const unitPrice = purchaseBaseUnitCost(purchase)
     if (qty <= 0) return
 
     const sku = normalizeText(purchase.sku)
@@ -129,7 +145,7 @@ function buildPurchaseLots(purchases = []) {
       sku: normalizeText(purchase.sku),
       item: normalizeText(purchase.item),
       quantity: Number(purchase.quantity || 0),
-      unitPrice: Number(purchase.unitPrice || 0),
+      unitPrice: purchaseBaseUnitCost(purchase),
       remaining: Number(purchase.quantity || 0),
     }))
     .filter((lot) => lot.quantity > 0 && Number.isFinite(lot.unitPrice))
@@ -195,4 +211,6 @@ module.exports = {
   buildAverageUnitCostIndex,
   computeMatchedGrossProfit,
   calculateSaleCostDetails,
+  purchaseBaseUnitCost,
+  purchaseTotal,
 }

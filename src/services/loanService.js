@@ -1,12 +1,18 @@
 const Loan = require('../models/Loan')
 const storeModel = require('../models/storeModel')
 const { auditActor } = require('../utils/tenantContext')
+const httpError = require('../utils/httpError')
+const { escapeRegex } = require('../utils/inventoryMatch')
 
+// Counting documents would reuse ids after a deletion, so continue from the highest one.
 async function generateLoanId(type) {
   const prefix = type === 'GIVEN' ? 'LG' : 'LT'
-  const count = await Loan.countDocuments(storeModel.branchScopedQuery({ type }))
-  const nextNum = 1000 + count + 1
-  return `${prefix}-${nextNum}`
+  const loans = await Loan.find(storeModel.branchScopedQuery({ type })).select('id').lean()
+  const highest = loans.reduce((max, loan) => {
+    const match = String(loan.id || '').match(new RegExp(`^${prefix}-(\\d+)$`))
+    return match ? Math.max(max, Number(match[1])) : max
+  }, 1000)
+  return `${prefix}-${highest + 1}`
 }
 
 async function listLoans({ type, status, search, page = 1, limit = 50 } = {}) {
@@ -15,7 +21,7 @@ async function listLoans({ type, status, search, page = 1, limit = 50 } = {}) {
   if (type) query.type = type.toUpperCase()
   if (status) query.status = status.toUpperCase()
   if (search) {
-    const regex = new RegExp(search, 'i')
+    const regex = new RegExp(escapeRegex(search), 'i')
     query.$or = [
       { id: regex },
       { partyName: regex },
@@ -25,20 +31,21 @@ async function listLoans({ type, status, search, page = 1, limit = 50 } = {}) {
     ]
   }
 
-  const skip = (Math.max(1, page) - 1) * limit
+  const pageNum = Math.max(1, parseInt(page, 10) || 1)
+  const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10) || 50))
   const [rows, count] = await Promise.all([
-    Loan.find(storeModel.branchScopedQuery(query)).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
+    Loan.find(storeModel.branchScopedQuery(query)).sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
     Loan.countDocuments(storeModel.branchScopedQuery(query)),
   ])
 
-  return { rows, count, page: Number(page), limit: Number(limit) }
+  return { rows, count, page: pageNum, limit: limitNum }
 }
 
 async function getLoanById(id) {
   await storeModel.ensureStore()
   const loan = await Loan.findOne(storeModel.branchScopedQuery({ id }))
   if (!loan) {
-    throw new Error(`Loan with ID ${id} not found`)
+    throw httpError(404, `Loan with ID ${id} not found`)
   }
   return loan
 }
@@ -47,26 +54,29 @@ async function createLoan(payload) {
   await storeModel.ensureStore()
   const type = payload.type ? payload.type.toUpperCase() : 'GIVEN'
   if (!['GIVEN', 'TAKEN'].includes(type)) {
-    throw new Error("Loan type must be either 'GIVEN' or 'TAKEN'")
+    throw httpError(400, "Loan type must be either 'GIVEN' or 'TAKEN'")
   }
 
   if (!payload.partyName || !payload.partyName.trim()) {
-    throw new Error('Borrower / Lender name is required')
+    throw httpError(400, 'Borrower / Lender name is required')
   }
 
   const principal = Number(payload.principalAmount || 0)
-  if (principal <= 0) {
-    throw new Error('Principal amount must be greater than 0')
+  if (!Number.isFinite(principal) || principal <= 0) {
+    throw httpError(400, 'Principal amount must be greater than 0')
   }
 
   const interestRate = Number(payload.interestRate || 0)
+  if (!Number.isFinite(interestRate) || interestRate < 0) throw httpError(400, 'Interest rate cannot be negative')
   const interestAmount = Number(
     payload.interestAmount != null
       ? payload.interestAmount
       : (principal * interestRate) / 100
   )
   const totalAmount = principal + interestAmount
-  const customId = payload.id || (await generateLoanId(type))
+  const customId = String(payload.id || '').trim() || (await generateLoanId(type))
+  if (await Loan.exists(storeModel.branchScopedQuery({ id: customId }))) throw httpError(409, `Loan ${customId} already exists`)
+  if (payload.dueDate && payload.startDate && payload.dueDate < payload.startDate) throw httpError(400, 'Due date cannot be before the start date')
   const today = new Date().toISOString().slice(0, 10)
 
   const loan = new Loan(storeModel.withBranchFields({
@@ -102,12 +112,16 @@ async function recordRepayment(id, payload) {
   await storeModel.ensureStore()
   const loan = await Loan.findOne(storeModel.branchScopedQuery({ id }))
   if (!loan) {
-    throw new Error(`Loan with ID ${id} not found`)
+    throw httpError(404, `Loan with ID ${id} not found`)
   }
 
   const amount = Number(payload.amount || 0)
-  if (amount <= 0) {
-    throw new Error('Repayment amount must be greater than 0')
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw httpError(400, 'Repayment amount must be greater than 0')
+  }
+  if (loan.status === 'PAID' || Number(loan.remainingBalance || 0) <= 0) throw httpError(409, 'This loan is already fully paid')
+  if (amount > Number(loan.remainingBalance || 0) + 0.005) {
+    throw httpError(400, `Repayment exceeds the remaining balance of ${Number(loan.remainingBalance || 0).toLocaleString('en-US')}`)
   }
 
   const repaymentId = `REP-${Date.now()}-${Math.floor(Math.random() * 1000)}`
@@ -138,7 +152,7 @@ async function updateLoan(id, payload) {
   await storeModel.ensureStore()
   const loan = await Loan.findOne(storeModel.branchScopedQuery({ id }))
   if (!loan) {
-    throw new Error(`Loan with ID ${id} not found`)
+    throw httpError(404, `Loan with ID ${id} not found`)
   }
 
   const updatableFields = [
@@ -170,7 +184,7 @@ async function deleteLoan(id) {
   await storeModel.ensureStore()
   const loan = await Loan.findOneAndDelete(storeModel.branchScopedQuery({ id }))
   if (!loan) {
-    throw new Error(`Loan with ID ${id} not found`)
+    throw httpError(404, `Loan with ID ${id} not found`)
   }
   return { success: true, id }
 }

@@ -1,4 +1,5 @@
 const AccessRole = require('../models/AccessRole')
+const User = require('../models/User')
 const httpError = require('../utils/httpError')
 const { currentTenant } = require('../utils/tenantContext')
 const {
@@ -55,6 +56,7 @@ async function createRole(payload = {}) {
   const tenant = currentTenant()
   await ensureDefaultRoles()
   const role = normalizeRolePayload(payload)
+  await assertCanGrant(role.permissions)
   if (BUILTIN_ROLE_TEMPLATES.some((template) => template.code === role.code)) {
     throw httpError(409, 'That role code is reserved by a built-in role')
   }
@@ -78,6 +80,8 @@ async function updateRole(code, payload = {}) {
   if (role.builtIn) throw httpError(400, 'Built-in roles cannot be changed')
 
   const next = normalizeRolePayload({ ...role.toObject(), ...payload }, role.toObject())
+  const existing = new Set((role.permissions || []).flatMap(({ module, actions }) => actions.map((action) => `${module}:${action}`)))
+  await assertCanGrant(next.permissions.map(({ module, actions }) => ({ module, actions: actions.filter((action) => !existing.has(`${module}:${action}`)) })))
   if (next.code !== role.code) throw httpError(400, 'A role code cannot be changed after creation')
   Object.assign(role, next)
   await role.save()
@@ -103,7 +107,42 @@ async function getEffectivePermissions(user) {
   const tenant = currentTenant()
   const roleCode = normalizeRoleCode(user?.accessRoleCode || defaultRoleCodeForUser(user))
   const role = await AccessRole.findOne({ ownerKey: tenant.ownerKey, code: roleCode, active: { $ne: false } }).lean()
-  return role?.permissions || []
+  return applyPermissionOverrides(role?.permissions || [], user?.permissionGrants, user?.permissionRevokes)
+}
+
+function applyPermissionOverrides(base, grants, revokes) {
+  const merged = new Map(normalizePermissions(base).map(({ module, actions }) => [module, new Set(actions)]))
+  for (const { module, actions } of normalizePermissions(grants)) {
+    const current = merged.get(module) || new Set()
+    actions.forEach((action) => current.add(action))
+    merged.set(module, current)
+  }
+  for (const { module, actions } of normalizePermissions(revokes)) {
+    const current = merged.get(module)
+    if (current) actions.forEach((action) => current.delete(action))
+  }
+  return [...merged.entries()]
+    .filter(([, actions]) => actions.size)
+    .map(([module, actions]) => ({ module, actions: PERMISSION_ACTIONS.filter((action) => actions.has(action)) }))
+}
+
+function isFullAccessActor(tenant = currentTenant()) {
+  return tenant.role === 'admin' || tenant.role === 'system_admin'
+}
+
+// A non-admin may only hand out permissions they hold themselves.
+async function assertCanGrant(grants) {
+  const tenant = currentTenant()
+  const requested = normalizePermissions(grants)
+  if (!requested.length || isFullAccessActor(tenant)) return
+  const actor = await User.findById(tenant.userId).select('-password').lean()
+  if (!actor) throw httpError(401, 'Account is unavailable')
+  const held = await getEffectivePermissions(actor)
+  for (const { module, actions } of requested) {
+    const heldActions = held.find((permission) => permission.module === module)?.actions || []
+    const missing = actions.filter((action) => !heldActions.includes(action))
+    if (missing.length) throw httpError(403, `You cannot grant ${missing.join(', ')} on ${module.replace(/_/g, ' ')} because you do not have it`)
+  }
 }
 
 async function assertAssignableRole(code, accountType = 'staff') {
@@ -113,6 +152,12 @@ async function assertAssignableRole(code, accountType = 'staff') {
   const role = await AccessRole.findOne({ ownerKey: tenant.ownerKey, code: normalized, active: { $ne: false } }).lean()
   if (!role) throw httpError(400, 'Select an active access role')
   return normalized
+}
+
+async function rolePermissions(code) {
+  const tenant = currentTenant()
+  const role = await AccessRole.findOne({ ownerKey: tenant.ownerKey, code: normalizeRoleCode(code) }).lean()
+  return role?.permissions || []
 }
 
 function normalizeRolePayload(payload = {}, fallback = {}) {
@@ -164,10 +209,15 @@ function serializeRole(role) {
 }
 
 module.exports = {
+  applyPermissionOverrides,
   assertAssignableRole,
+  assertCanGrant,
   createRole,
   getEffectivePermissions,
   hasPermission,
+  isFullAccessActor,
   listRoles,
+  normalizePermissions,
+  rolePermissions,
   updateRole,
 }

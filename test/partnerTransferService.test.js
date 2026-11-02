@@ -105,6 +105,60 @@ const { computeMatchedGrossProfit } = require('../src/utils/profitCalculator')
   assert.equal(profit.grossProfit, 750)
 })
 
+test('out-only and disposal modes use the movement ledger exactly once', async () => {
+  const movementCountBefore = stockMovements.length
+  const plain = await service.processTransfer({
+    direction: 'OUT',
+    accountingMode: 'NONE',
+    partner: 'Warehouse B',
+    item: 'Owned Product',
+    sku: 'OWN-1',
+    quantity: 2,
+  })
+
+  assert.equal(store.inventory[0].stock, 8)
+  assert.equal(stockMovements.length, movementCountBefore + 1)
+  assert.equal(stockMovements.at(-1).type, 'TRANSFER_OUT')
+  assert.equal(plain.transfer.accountingMode, 'NONE')
+  assert.equal(plain.transfer.direction, 'OUT')
+
+  const disposal = await service.processTransfer({
+    direction: 'OUT',
+    accountingMode: 'DISPOSAL',
+    partner: 'Disposed stock',
+    item: 'Owned Product',
+    sku: 'OWN-1',
+    quantity: 1,
+    notes: 'Damaged transit unit',
+  })
+
+  assert.equal(store.inventory[0].stock, 7)
+  assert.equal(stockMovements.length, movementCountBefore + 2)
+  assert.equal(stockMovements.at(-1).type, 'DAMAGE')
+  assert.equal(disposal.transfer.accountingMode, 'DISPOSAL')
+})
+
+test('transfer in purchase adds stock and purchase accounting once', async () => {
+  const movementCountBefore = stockMovements.length
+  const purchaseCountBefore = store.purchases.length
+  const result = await service.processTransfer({
+    direction: 'IN',
+    accountingMode: 'PURCHASE',
+    partner: 'Supplier One',
+    item: 'Owned Product',
+    sku: 'OWN-1',
+    quantity: 2,
+    unitPrice: 300,
+  })
+
+  assert.equal(store.inventory[0].stock, 9)
+  assert.equal(store.purchases.length, purchaseCountBefore + 1)
+  assert.equal(stockMovements.length, movementCountBefore + 1)
+  assert.equal(stockMovements.at(-1).type, 'PURCHASE')
+  assert.equal(result.transfer.accountingMode, 'PURCHASE')
+  assert.equal(result.transfer.accountingReference, result.accounting.id)
+})
+
 test('cannot sell or return beyond the unallocated partner quantity', async () => {
   const transfer = await service.receivePartnerStock({
     partner: 'Second Shop',

@@ -38,7 +38,7 @@ function normalizeDocumentId(prefix, row = {}, existingId) {
   const rawId = String(existingId || '').trim()
   if (!rawId) return formatDocumentId(prefix, row)
   if (rawId.startsWith(prefix.toUpperCase() + '-') || rawId.startsWith(prefix.toLowerCase() + '-')) {
-    const alreadyReadable = rawId.match(new RegExp(`^${prefix}-[a-z0-9-]+-\d{4}-\d{2}-\d{2}-\d{2}:\d{2}$`, 'i'))
+    const alreadyReadable = rawId.match(new RegExp(`^${prefix}-[a-z0-9-]+-\\d{4}-\\d{2}-\\d{2}-\\d{2}:\\d{2}$`, 'i'))
     if (alreadyReadable) return rawId
   }
   return formatDocumentId(prefix, row, rawId)

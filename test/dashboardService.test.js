@@ -30,18 +30,32 @@ const { getDashboard } = require('../src/services/dashboardService')
 
 test('dashboard applies date, category, and stock filters', async () => {
   const all = await getDashboard()
-  assert.equal(all.metrics[1].value, 'RWF 350')
+  assert.deepEqual(all.metrics.map((metric) => metric.label), [
+    'Sales',
+    'Purchases',
+    'Products',
+    'Units in stock',
+    'Low stock',
+  ])
+  assert.equal(all.metrics[0].value, 'RWF 350')
+  assert.equal(all.metrics[1].value, 'RWF 70')
+  assert.equal(all.metrics[2].value, '3')
+  assert.equal(all.metrics[3].value, '55')
+  assert.equal(all.metrics[4].value, '2')
   assert.equal(all.salesBars.length, 12)
   assert.equal(all.salesLabels.length, 6)
 
   const dateFiltered = await getDashboard({ from: '2026-10-01', to: '2026-10-01' })
-  assert.equal(dateFiltered.metrics[1].value, 'RWF 250')
-  assert.equal(dateFiltered.metrics[1].delta, '1 orders')
+  assert.equal(dateFiltered.metrics[0].value, 'RWF 250')
+  assert.equal(dateFiltered.metrics[0].delta, '1 orders')
+  assert.equal(dateFiltered.metrics[1].value, 'RWF 30')
 
   const categoryFiltered = await getDashboard({ category: 'Electronics' })
-  assert.equal(categoryFiltered.metrics[0].value, '2')
+  assert.equal(categoryFiltered.metrics[2].value, '2')
 
   const outOfStock = await getDashboard({ stockStatus: 'out' })
-  assert.equal(outOfStock.metrics[0].value, '1')
+  assert.equal(outOfStock.metrics[2].value, '1')
+  assert.equal(outOfStock.metrics[3].value, '0')
+  assert.equal(outOfStock.metrics[4].value, '1')
   assert.equal(outOfStock.lowStock.length, 1)
 })

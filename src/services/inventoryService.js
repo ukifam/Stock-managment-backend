@@ -8,6 +8,9 @@ const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
 const stockMovementService = require('./stockMovementService')
 const { assertUnitExists, normalizeUnitCode } = require('./unitConversionService')
+const { inventoryStatus } = require('../utils/inventoryMatch')
+
+const PROTECTED_FIELDS = ['_id', '__v', 'ownerKey', 'ownerEmail', 'branchCode', 'createdBy', 'createdAt', 'updatedAt', 'sku', 'stock', 'rawStock', 'rawCapacity', 'rawPrice']
 
 /**
  * List inventory with pagination, filtering, and caching
@@ -33,12 +36,12 @@ async function listInventory({ period = 'yearly', search = '', page = 1, limit =
 
   // Apply category filter if provided
   if (category) {
-    rows = rows.filter((row) => row.category.toLowerCase() === category.toLowerCase())
+    rows = rows.filter((row) => String(row.category || '').toLowerCase() === category.toLowerCase())
   }
 
   // Apply status filter if provided
   if (status) {
-    rows = rows.filter((row) => row.status.toLowerCase() === status.toLowerCase())
+    rows = rows.filter((row) => String(row.status || '').toLowerCase() === status.toLowerCase())
   }
 
   // Apply search filter
@@ -168,30 +171,39 @@ async function updateInventoryItem(sku, body) {
   const index = store.inventory.findIndex((row) => row.sku === sku)
   if (index === -1) throw httpError(404, 'Inventory item not found')
 
-  store.inventory[index] = {
-    ...store.inventory[index],
-    ...body,
-    capacity: body.capacity !== undefined ? parseQuantity(body.capacity, store.inventory[index].capacity) : store.inventory[index].capacity,
-    price: body.price !== undefined ? parseMoney(body.price, store.inventory[index].price) : store.inventory[index].price,
-    baseUnit: body.baseUnit !== undefined ? normalizeUnitCode(body.baseUnit) : store.inventory[index].baseUnit,
+  const current = store.inventory[index]
+  const changes = { ...body }
+  PROTECTED_FIELDS.forEach((field) => delete changes[field])
+  const previousStock = Number(current.stock || 0)
+  const nextStock = body.stock !== undefined ? parseQuantity(body.stock, previousStock) : previousStock
+  if (nextStock < 0) throw httpError(400, 'Stock cannot be negative')
+
+  const next = {
+    ...current,
+    ...changes,
+    stock: nextStock,
+    capacity: body.capacity !== undefined ? parseQuantity(body.capacity, current.capacity) : current.capacity,
+    price: body.price !== undefined ? parseMoney(body.price, current.price) : current.price,
+    baseUnit: body.baseUnit !== undefined ? normalizeUnitCode(body.baseUnit) : current.baseUnit,
   }
+  if (body.status === undefined || nextStock !== previousStock) next.status = inventoryStatus(nextStock, next)
+  store.inventory[index] = next
 
   await storeModel.writeStore(store)
-
-  // Clear caches after updating
+  if (nextStock !== previousStock) {
+    await stockMovementService.recordMovement({
+      sku,
+      type: 'ADJUSTMENT',
+      quantity: nextStock - previousStock,
+      previousStock,
+      newStock: nextStock,
+      reason: String(body.adjustmentReason || 'Stock corrected from product details'),
+      warehouseCode: next.defaultWarehouseCode || '',
+    })
+  }
   CacheManager.clear()
 
-  return inventoryDto(store.inventory[index], currencyFromSettings(store.settings))
-}
-
-/**
- * Clear all inventory-related caches
- * This is called after any write operation to ensure cache freshness
- */
-function clearInventoryCaches() {
-  // In production, implement more sophisticated cache invalidation
-  // For now, we'll rely on TTL-based cache expiry (60 seconds)
-  // If immediate cache refresh is needed, you can call: CacheManager.clear()
+  return inventoryDto(next, currencyFromSettings(store.settings))
 }
 
 module.exports = {
@@ -259,7 +271,7 @@ function buildInventoryRecord(body, store, index = 0) {
     batchTracking: Boolean(body.batchTracking),
     expiryTracking: Boolean(body.expiryTracking),
     serialTracking: Boolean(body.serialTracking),
-    status: body.status || (stock <= 0 ? 'Out of Stock' : 'Active'),
+    status: body.status || inventoryStatus(stock, { reorderLevel: body.reorderLevel ?? body.reorderlevel, minimumStock: body.minimumStock ?? body.minstock }),
     serial: body.serial || body.serialnumber || body.serialNumber || '',
     supplier: body.supplier || body.vendor || '',
     extractedText: body.extractedText || '',

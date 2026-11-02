@@ -17,7 +17,7 @@ function actionForRequest(req) {
   if (req.method === 'GET') return req.query?.export || /export/i.test(req.path) ? 'export' : 'view'
   if (req.method === 'DELETE') return 'delete'
   const status = String(req.body?.status || req.body?.outcome || '').toUpperCase()
-  if (status.includes('CANCEL')) return 'cancel'
+  if (status.includes('CANCEL') || /\/cancel(?:\/|$)/i.test(req.path)) return 'cancel'
   if (/\/(status|quality|approve|reject)(?:\/|$)/i.test(req.path)) return 'approve'
   if (req.method === 'POST') return 'create'
   return 'edit'

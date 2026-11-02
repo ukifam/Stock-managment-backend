@@ -23,6 +23,9 @@ const businessSchema = new mongoose.Schema(
     template: { type: String, default: 'other' },
     processingEnabled: { type: Boolean, default: undefined },
     active: { type: Boolean, default: true, index: true },
+    // Last day of the week whose report was emailed (YYYY-MM-DD, Africa/Kigali).
+    weeklyReportSentFor: { type: String, default: '' },
+    weeklyReportSentAt: { type: Date, default: null },
   },
   { timestamps: true }
 )

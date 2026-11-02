@@ -1,6 +1,14 @@
 const mongoose = require('mongoose')
 const { SHOP_ROLES } = require('../utils/shopRoles')
 
+const permissionSchema = new mongoose.Schema(
+  {
+    module: { type: String, required: true, trim: true },
+    actions: { type: [String], default: [] },
+  },
+  { _id: false }
+)
+
 const userSchema = new mongoose.Schema(
   {
     username: { type: String, required: true, trim: true },
@@ -9,6 +17,9 @@ const userSchema = new mongoose.Schema(
     role: { type: String, enum: ['system_admin', 'admin', 'staff'], default: 'admin', index: true },
     shopRole: { type: String, enum: SHOP_ROLES, default: 'sales_associate', index: true },
     accessRoleCode: { type: String, default: '', lowercase: true, trim: true, index: true },
+    // Per-user exceptions applied on top of the access role.
+    permissionGrants: { type: [permissionSchema], default: [] },
+    permissionRevokes: { type: [permissionSchema], default: [] },
     ownerKey: { type: String, default: '', index: true },
     ownerEmail: { type: String, default: '', lowercase: true, trim: true },
     branchCodes: { type: [String], default: [] },

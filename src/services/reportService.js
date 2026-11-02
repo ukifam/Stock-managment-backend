@@ -2,7 +2,7 @@ const storeModel = require('../models/storeModel')
 const { filterByPeriod, filterByRange } = require('../utils/filters')
 const { formatCurrency, purchaseDto, saleDto, expenseDto } = require('../utils/formatters')
 const { currencyFromSettings } = require('../utils/settings')
-const { buildAverageUnitCostIndex, computeMatchedGrossProfit, calculateSaleCostDetails } = require('../utils/profitCalculator')
+const { buildAverageUnitCostIndex, computeMatchedGrossProfit, calculateSaleCostDetails, purchaseTotal } = require('../utils/profitCalculator')
 
 const CREDIT_PURCHASE_STATUSES = ['pending', 'delayed']
 
@@ -16,7 +16,7 @@ async function getReports({ period = 'yearly', from, to, credit = 'all' }) {
   const reportSales = credit === 'salesCredit' ? sales.filter(isCreditSale) : sales
   const reportPurchases = credit === 'purchasesCredit' ? purchases.filter(isCreditPurchase) : purchases
   const revenue = sales.reduce((sum, sale) => sum + Number(sale.value || 0), 0)
-  const purchaseCost = purchases.reduce((sum, purchase) => sum + Number(purchase.quantity * purchase.unitPrice || 0), 0)
+  const purchaseCost = purchases.reduce((sum, purchase) => sum + purchaseTotal(purchase), 0)
   const purchaseCostIndex = buildAverageUnitCostIndex(purchases, store.inventory)
   const matchedProfit = computeMatchedGrossProfit(sales, purchaseCostIndex, store.inventory, purchases)
   const costOfGoodsSold = matchedProfit.costOfGoodsSold
@@ -136,10 +136,6 @@ function isCreditSale(sale) {
 function isCreditPurchase(purchase) {
   return String(purchase.payment || '').toLowerCase() === 'credit'
     || CREDIT_PURCHASE_STATUSES.includes(String(purchase.status || '').toLowerCase())
-}
-
-function purchaseTotal(purchase) {
-  return Number(purchase.quantity || 0) * Number(purchase.unitPrice || 0)
 }
 
 function getPaidAmount(row, total) {

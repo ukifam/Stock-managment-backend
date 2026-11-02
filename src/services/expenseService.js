@@ -59,26 +59,27 @@ async function createExpense(payload) {
     throw httpError(400, 'Missing required fields: date and amount')
   }
 
+  const amount = Number(payload.amount)
+  if (!Number.isFinite(amount) || amount <= 0) throw httpError(400, 'Expense amount must be greater than zero')
+
   const store = await storeModel.readStore()
   store.expenses = store.expenses || []
 
   const item = {
     date: payload.date,
-    amount: Number(payload.amount) || 0,
+    amount,
     category: payload.category || 'General',
     description: payload.description || '',
     vendor: payload.vendor || '',
     reference: payload.reference || '',
     status: payload.status || 'Recorded',
-    id: payload.reference || `EX-${Date.now()}`,
+    id: String(payload.reference || '').trim() || `EX-${Date.now()}`,
   }
 
-  const existingIndex = store.expenses.findIndex((e) => e.id === item.id || e._id?.toString() === item.id)
-  if (existingIndex >= 0) {
-    store.expenses[existingIndex] = { ...store.expenses[existingIndex], ...item }
-  } else {
-    store.expenses.unshift(item)
+  if (store.expenses.some((e) => e.id === item.id || e._id?.toString() === item.id)) {
+    throw httpError(409, `Expense reference ${item.id} already exists`)
   }
+  store.expenses.unshift(item)
 
   await storeModel.writeStore(store)
   CacheManager.clear()
@@ -106,6 +107,8 @@ async function updateExpense(id, body) {
     status: body.status || existing.status || 'Recorded',
     id: nextId,
   }
+
+  if (!Number.isFinite(nextExpense.amount) || nextExpense.amount <= 0) throw httpError(400, 'Expense amount must be greater than zero')
 
   const hasDuplicateReference = store.expenses.some((expense, expenseIndex) => {
     if (expenseIndex === index) return false

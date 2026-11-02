@@ -9,6 +9,7 @@ const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
 const stockMovementService = require('./stockMovementService')
 const { convertItemQuantity, convertQuantity, normalizeUnitCode } = require('./unitConversionService')
+const { findInventoryItem, inventoryStatus } = require('../utils/inventoryMatch')
 
 /**
  * List purchases with pagination, filtering, and caching
@@ -27,7 +28,7 @@ async function listPurchases({ period = 'yearly', search = '', page = 1, limit =
   let rows = from || to ? filterByRange(store.purchases, from, to) : filterByPeriod(store.purchases, period)
 
   if (status) {
-    rows = rows.filter((row) => row.status.toLowerCase() === status.toLowerCase())
+    rows = rows.filter((row) => String(row.status || '').toLowerCase() === status.toLowerCase())
   }
 
   if (search) {
@@ -144,7 +145,11 @@ async function bulkImportPurchases(bodies) {
   }
 }
 
-async function updatePurchaseStatus(id, status) {
+const ALLOWED_STATUSES = ['Pending', 'Received', 'Returned', 'Delayed', 'Cancelled', 'Given']
+
+async function updatePurchaseStatus(id, requestedStatus) {
+  const status = ALLOWED_STATUSES.find((value) => value.toLowerCase() === String(requestedStatus || '').trim().toLowerCase())
+  if (!status) throw httpError(400, `Status must be one of: ${ALLOWED_STATUSES.join(', ')}`)
   const store = await storeModel.readStore()
   const index = store.purchases.findIndex((purchase) => purchase.id === id)
   if (index === -1) throw httpError(404, 'Purchase not found')
@@ -248,18 +253,29 @@ async function deletePurchase(id) {
   const index = store.purchases.findIndex((row) => row.id === id)
   if (index === -1) throw httpError(404, 'Purchase not found')
 
-  store.purchases.splice(index, 1)
+  const [purchase] = store.purchases.splice(index, 1)
+  const existing = findInventoryItem(store.inventory, purchase)
+  const previousStock = Number(existing?.stock || 0)
+  removePurchaseFromInventory(store, purchase)
   await storeModel.writeStore(store)
-  try {
-    const Purchase = require('../models/Purchase')
-    await Purchase.deleteOne(storeModel.branchScopedQuery({ id }))
-  } catch (e) {
-    console.error('Error deleting purchase from MongoDB:', e)
+  const Purchase = require('../models/Purchase')
+  await Purchase.deleteOne(purchase._id ? { _id: purchase._id } : storeModel.branchScopedQuery({ id }))
+
+  if (existing && previousStock !== Number(existing.stock || 0)) {
+    await stockMovementService.recordMovement({
+      sku: existing.sku,
+      type: 'ADJUSTMENT',
+      quantity: Number(existing.stock || 0) - previousStock,
+      previousStock,
+      newStock: Number(existing.stock || 0),
+      reason: `Purchase ${id} deleted; received stock removed`,
+      reference: id,
+      warehouseCode: purchase.warehouseCode || existing.defaultWarehouseCode || '',
+    })
   }
   CacheManager.clear()
   return { success: true, id }
 }
-
 
 function buildPurchaseRecord(body, store, index = 0) {
   const quantity = parseQuantity(body.quantity, 1)
@@ -309,7 +325,7 @@ function removePurchaseFromInventory(store, purchase) {
   if (!existing) return
 
   existing.stock = Math.max(0, Number(existing.stock || 0) - Number(purchase.quantity || 0))
-  existing.status = inventoryStatus(existing.stock)
+  existing.status = inventoryStatus(existing.stock, existing)
 }
 
 function applyPurchaseToInventory(store, purchase) {
@@ -320,7 +336,7 @@ function applyPurchaseToInventory(store, purchase) {
     existing.capacity = Math.max(Number(existing.capacity || 0), Number(existing.stock || 0))
     existing.price = Number(purchase.inventoryPrice ?? purchase.unitPrice ?? existing.price ?? 0)
     existing.purchasePrice = Number(purchase.inventoryPrice ?? purchase.unitPrice ?? existing.purchasePrice ?? existing.price ?? 0)
-    existing.status = inventoryStatus(existing.stock)
+    existing.status = inventoryStatus(existing.stock, existing)
     existing.extractedText = purchase.extractedText || existing.extractedText || ''
     return
   }
@@ -377,34 +393,6 @@ async function applyPurchaseUnitConversion(purchase, store, body = {}) {
   if (body.inventoryPrice === undefined && converted.quantity > 0) {
     purchase.inventoryPrice = Number((Number(purchase.unitPrice || 0) * originalQuantity) / converted.quantity)
   }
-}
-
-function findInventoryItem(inventory, entry) {
-  const sku = normalizeText(entry.sku)
-  const item = normalizeText(entry.item)
-
-  return inventory.find((row) => {
-    const rowSku = normalizeText(row.sku)
-    const rowItem = normalizeText(row.item)
-    return (sku && rowSku === sku) || itemMatches(rowItem, item)
-  })
-}
-
-function normalizeText(value) {
-  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ')
-}
-
-function itemMatches(rowItem, item) {
-  if (!rowItem || !item) return false
-  if (rowItem === item) return true
-  return rowItem.includes(item) || item.includes(rowItem)
-}
-
-function inventoryStatus(stock) {
-  const count = Number(stock || 0)
-  if (count <= 0) return 'Out of Stock'
-  if (count <= 5) return 'Low'
-  return 'Active'
 }
 
 function isCreditPayment(payment) {

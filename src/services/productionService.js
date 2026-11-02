@@ -993,7 +993,7 @@ async function ensureRecipeIndexes() {
   if (!recipeIndexMigration) {
     recipeIndexMigration = (async () => {
       await Recipe.updateMany({ version: { $exists: false } }, { $set: { version: 1, approvalStatus: 'APPROVED' } })
-      try { await Recipe.collection.dropIndex('ownerKey_1_branchCode_1_productSku_1') } catch (error) { if (error.code !== 27 && error.codeName !== 'IndexNotFound') throw error }
+      try { await Recipe.collection.dropIndex('ownerKey_1_branchCode_1_productSku_1') } catch (error) { if (![26, 27].includes(error.code) && !['IndexNotFound', 'NamespaceNotFound'].includes(error.codeName)) throw error }
       await Recipe.collection.createIndex({ ownerKey: 1, branchCode: 1, productSku: 1, version: 1 }, { unique: true })
     })()
   }

@@ -8,6 +8,10 @@ async function receiveTransfer(req, res) {
   res.status(201).json(await partnerTransferService.receivePartnerStock(req.body))
 }
 
+async function processTransfer(req, res) {
+  res.status(201).json(await partnerTransferService.processTransfer(req.body))
+}
+
 async function sellTransfer(req, res) {
   res.status(201).json(await partnerTransferService.sellTransferredStock(req.params.id, req.body))
 }
@@ -16,4 +20,4 @@ async function returnTransfer(req, res) {
   res.status(201).json(await partnerTransferService.returnTransferredStock(req.params.id, req.body))
 }
 
-module.exports = { listTransfers, receiveTransfer, sellTransfer, returnTransfer }
+module.exports = { listTransfers, receiveTransfer, processTransfer, sellTransfer, returnTransfer }

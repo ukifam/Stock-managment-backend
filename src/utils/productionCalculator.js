@@ -1,7 +1,7 @@
 function calculateProductionPlan(recipe, inventory = [], configuration = {}, targetQuantity) {
   const plannedQuantity = positiveNumber(targetQuantity, 0)
   const yieldQuantity = positiveNumber(recipe?.yieldQuantity, 1)
-  if (plannedQuantity <= 0) throw new Error('Production quantity must be greater than 0')
+  if (plannedQuantity <= 0) throw Object.assign(new Error('Production quantity must be greater than 0'), { status: 400 })
 
   const batches = plannedQuantity / yieldQuantity
   const inventoryBySku = new Map(inventory.map((item) => [String(item.sku), item]))

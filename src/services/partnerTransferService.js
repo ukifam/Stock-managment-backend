@@ -24,6 +24,174 @@ async function listTransfers({ status = 'ALL', search = '' } = {}) {
   }
 }
 
+async function processTransfer(body = {}) {
+  const direction = String(body.direction || '').trim().toUpperCase()
+  const accountingMode = String(body.accountingMode || 'NONE').trim().toUpperCase()
+  if (!['IN', 'OUT'].includes(direction)) throw httpError(400, 'Direction must be IN or OUT')
+
+  const validModes = direction === 'IN' ? ['NONE', 'PURCHASE'] : ['NONE', 'SALE', 'DISPOSAL']
+  if (!validModes.includes(accountingMode)) throw httpError(400, `Invalid ${direction} accounting mode`)
+
+  const quantity = Number(body.quantity)
+  const item = String(body.item || '').trim()
+  const sku = String(body.sku || '').trim()
+  if (!item || !Number.isInteger(quantity) || quantity <= 0) throw httpError(400, 'Item and a positive whole quantity are required')
+
+  const date = body.date || new Date().toISOString().slice(0, 10)
+  const reference = `TR-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+
+  if (direction === 'IN') {
+    if (accountingMode === 'PURCHASE') {
+      const unitPrice = Number(body.unitPrice)
+      const supplier = String(body.partner || '').trim()
+      if (!supplier) throw httpError(400, 'Supplier is required')
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) throw httpError(400, 'Purchase unit cost must be zero or greater')
+
+      const purchaseService = require('./purchaseService')
+      const purchase = await purchaseService.createPurchase({
+        id: `TRP-${reference.slice(3)}`,
+        item,
+        sku,
+        supplier,
+        category: body.category || 'General',
+        quantity,
+        unitPrice,
+        inventoryPrice: body.inventoryPrice === undefined ? unitPrice : Number(body.inventoryPrice),
+        date,
+        payment: body.payment || 'Cash',
+        paidAmount: body.paidAmount,
+      })
+
+      const transfer = await PartnerTransfer.create({
+        ...storeModel.withBranchFields({
+          direction,
+          accountingMode,
+          accountingReference: purchase.id,
+          reference,
+          partner: supplier,
+          sku: purchase.sku || sku,
+          item,
+          category: String(body.category || 'General').trim(),
+          quantityReceived: quantity,
+          partnerUnitCost: unitPrice,
+          customerUnitPrice: Number(body.customerUnitPrice || 0),
+          receivedDate: date,
+          status: 'CLOSED',
+          notes: String(body.notes || '').trim(),
+        }),
+      })
+      CacheManager.clear()
+      return { transfer: withBalance(transfer.toObject()), accounting: purchase }
+    }
+
+    const transfer = await receivePartnerStock({
+      partner: body.partner,
+      partnerPhone: body.partnerPhone,
+      item,
+      sku,
+      category: body.category,
+      quantityReceived: quantity,
+      partnerUnitCost: body.unitPrice,
+      customerUnitPrice: body.customerUnitPrice,
+      receivedDate: date,
+      notes: body.notes,
+    })
+    await PartnerTransfer.updateOne(storeModel.branchScopedQuery({ _id: transfer._id }), {
+      $set: { direction: 'IN', accountingMode: 'NONE', updatedBy: auditActor() },
+    })
+    return { transfer: { ...transfer, direction: 'IN', accountingMode: 'NONE' } }
+  }
+
+  if (accountingMode === 'SALE') {
+    const customer = String(body.partner || '').trim()
+    const unitPrice = Number(body.customerUnitPrice ?? body.unitPrice)
+    if (!customer) throw httpError(400, 'Customer is required')
+    if (!sku) throw httpError(400, 'SKU is required')
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw httpError(400, 'Sale unit price must be greater than zero')
+
+    const saleService = require('./saleService')
+    const sale = await saleService.createSale({
+      item,
+      sku,
+      customer,
+      quantity,
+      value: quantity * unitPrice,
+      unitPrice,
+      payment: body.payment || 'Cash',
+      paidAmount: body.paidAmount,
+      date,
+      id: `TS-${reference.slice(3)}`,
+      category: body.category || 'General',
+    })
+
+    const transfer = await createClosedOutTransfer({
+      direction, accountingMode, accountingReference: sale.id, reference, partner: customer, item, sku,
+      category: body.category, quantity, unitCost: body.unitCost, unitPrice, date, notes: body.notes,
+      quantitySold: quantity,
+    })
+    CacheManager.clear()
+    return { transfer: withBalance(transfer.toObject()), accounting: sale }
+  }
+
+  const stockMovementService = require('./stockMovementService')
+  if (!sku) throw httpError(400, 'SKU is required')
+  const movementType = accountingMode === 'DISPOSAL' ? 'DAMAGE' : 'TRANSFER_OUT'
+  const movement = await stockMovementService.adjustStock({
+    sku,
+    quantity: -quantity,
+    type: movementType,
+    reason: accountingMode === 'DISPOSAL'
+      ? `Transfer disposal: ${String(body.notes || '').trim() || item}`
+      : `Transfer out: ${String(body.notes || '').trim() || item}`,
+    reference,
+    partner: String(body.partner || '').trim(),
+    date,
+  })
+
+  const transfer = await createClosedOutTransfer({
+    direction,
+    accountingMode,
+    accountingReference: movement._id || movement.id || reference,
+    reference,
+    partner: String(body.partner || '').trim() || 'Stock movement',
+    item,
+    sku,
+    category: body.category,
+    quantity,
+    unitCost: body.unitCost,
+    unitPrice: body.customerUnitPrice || 0,
+    date,
+    notes: body.notes,
+    quantityReturned: quantity,
+  })
+  CacheManager.clear()
+  return { transfer: withBalance(transfer.toObject()), accounting: movement }
+}
+
+async function createClosedOutTransfer({ quantityReturned = 0, quantitySold = 0, ...fields }) {
+  const transfer = await PartnerTransfer.create({
+    ...storeModel.withBranchFields({
+      direction: fields.direction,
+      accountingMode: fields.accountingMode,
+      accountingReference: fields.accountingReference,
+      reference: fields.reference,
+      partner: fields.partner,
+      sku: fields.sku,
+      item: fields.item,
+      category: String(fields.category || 'General').trim(),
+      quantityReceived: fields.quantity,
+      quantitySold,
+      quantityReturned,
+      partnerUnitCost: Number(fields.unitCost || 0),
+      customerUnitPrice: Number(fields.unitPrice || 0),
+      receivedDate: fields.date,
+      status: 'CLOSED',
+      notes: String(fields.notes || '').trim(),
+    }),
+  })
+  return transfer
+}
+
 async function receivePartnerStock(body = {}) {
   const partner = String(body.partner || '').trim()
   const item = String(body.item || '').trim()
@@ -162,6 +330,7 @@ function withBalance(transfer) {
 
 module.exports = {
   listTransfers,
+  processTransfer,
   receivePartnerStock,
   sellTransferredStock,
   returnTransferredStock,

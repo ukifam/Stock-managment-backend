@@ -3,7 +3,7 @@ const User = require('../models/User')
 const httpError = require('../utils/httpError')
 const { MAIN_BRANCH_CODE, currentTenant, ownerKeyForUser } = require('../utils/tenantContext')
 const { SHOP_ROLES } = require('../utils/shopRoles')
-const { assertAssignableRole } = require('./accessRoleService')
+const { assertAssignableRole, assertCanGrant, isFullAccessActor, normalizePermissions, rolePermissions } = require('./accessRoleService')
 
 function serialize(user) {
   return {
@@ -13,9 +13,51 @@ function serialize(user) {
     accountType: user.role,
     shopRole: user.shopRole || (user.role === 'admin' ? 'store_manager' : 'sales_associate'),
     accessRoleCode: user.accessRoleCode || '',
+    permissionGrants: user.permissionGrants || [],
+    permissionRevokes: user.permissionRevokes || [],
     active: user.active !== false,
     createdAt: user.createdAt,
   }
+}
+
+function assertCanSetAccountType(tenant, accountType) {
+  if (accountType === 'admin' && !isFullAccessActor(tenant)) {
+    throw httpError(403, 'Only a shop administrator can create or promote administrators')
+  }
+}
+
+async function assertCanAssignRole(tenant, code) {
+  if (!isFullAccessActor(tenant)) await assertCanGrant(await rolePermissions(code))
+}
+
+// Administrators always have full access, so per-user exceptions only apply to staff.
+async function resolveOverrides(tenant, body, accountType, current = {}) {
+  if (accountType === 'admin') return { permissionGrants: [], permissionRevokes: [] }
+  const permissionGrants = body.permissionGrants !== undefined ? normalizePermissions(body.permissionGrants) : current.permissionGrants || []
+  const permissionRevokes = body.permissionRevokes !== undefined ? normalizePermissions(body.permissionRevokes) : current.permissionRevokes || []
+  if (body.permissionGrants !== undefined) {
+    const existing = new Set(permissionKeys(current.permissionGrants))
+    const added = permissionGrants
+      .map(({ module, actions }) => ({ module, actions: actions.filter((action) => !existing.has(`${module}:${action}`)) }))
+      .filter(({ actions }) => actions.length)
+    await assertCanGrant(added)
+  }
+  return { permissionGrants, permissionRevokes }
+}
+
+function permissionKeys(permissions) {
+  return normalizePermissions(permissions).flatMap(({ module, actions }) => actions.map((action) => `${module}:${action}`)).sort()
+}
+
+function samePermissions(a, b) {
+  return permissionKeys(a).join('|') === permissionKeys(b).join('|')
+}
+
+function changesAccess(user, body) {
+  return (body.accountType !== undefined && String(body.accountType).trim().toLowerCase() !== user.role)
+    || (body.accessRoleCode !== undefined && String(body.accessRoleCode).trim().toLowerCase() !== user.accessRoleCode)
+    || (body.permissionGrants !== undefined && !samePermissions(body.permissionGrants, user.permissionGrants))
+    || (body.permissionRevokes !== undefined && !samePermissions(body.permissionRevokes, user.permissionRevokes))
 }
 
 async function listUsers() {
@@ -35,8 +77,11 @@ async function createUser(body = {}) {
   if (!username || !email || password.length < 8) throw httpError(400, 'Name, email, and a password of at least 8 characters are required')
   if (!SHOP_ROLES.includes(shopRole)) throw httpError(400, 'Select a valid shop role')
   if (!['admin', 'staff'].includes(accountType)) throw httpError(400, 'Select a valid account type')
+  assertCanSetAccountType(tenant, accountType)
   if (await User.findOne({ email })) throw httpError(409, 'An account with this email already exists')
   const accessRoleCode = await assertAssignableRole(body.accessRoleCode, accountType)
+  await assertCanAssignRole(tenant, accessRoleCode)
+  const overrides = await resolveOverrides(tenant, body, accountType)
 
   const user = await User.create({
     username,
@@ -45,6 +90,7 @@ async function createUser(body = {}) {
     role: accountType,
     shopRole,
     accessRoleCode,
+    ...overrides,
     ownerKey: tenant.ownerKey,
     ownerEmail: tenant.ownerEmail,
     branchCodes: [MAIN_BRANCH_CODE],
@@ -59,6 +105,9 @@ async function updateUser(id, body = {}) {
   const tenant = currentTenant()
   const user = await User.findById(id)
   if (!user || !['admin', 'staff'].includes(user.role) || ownerKeyForUser(user) !== tenant.ownerKey) throw httpError(404, 'Business user not found')
+  const isSelf = String(user._id) === tenant.userId
+  if (user.role === 'admin' && !isFullAccessActor(tenant)) throw httpError(403, 'Only a shop administrator can change an administrator account')
+  if (isSelf && changesAccess(user, body) && !isFullAccessActor(tenant)) throw httpError(403, 'You cannot change your own access')
 
   if (body.username !== undefined) {
     const username = String(body.username).trim()
@@ -86,13 +135,22 @@ async function updateUser(id, body = {}) {
   if (body.accountType !== undefined) {
     const accountType = String(body.accountType).trim().toLowerCase()
     if (!['admin', 'staff'].includes(accountType)) throw httpError(400, 'Select a valid account type')
-    if (String(user._id) === tenant.userId && accountType !== 'admin') throw httpError(400, 'You cannot remove your own administrator access')
+    if (isSelf && accountType !== 'admin') throw httpError(400, 'You cannot remove your own administrator access')
+    assertCanSetAccountType(tenant, accountType)
     user.role = accountType
   }
   if (body.accessRoleCode !== undefined || body.accountType !== undefined) {
-    user.accessRoleCode = await assertAssignableRole(body.accessRoleCode || user.accessRoleCode, user.role)
+    const accessRoleCode = await assertAssignableRole(body.accessRoleCode || user.accessRoleCode, user.role)
+    if (accessRoleCode !== user.accessRoleCode) await assertCanAssignRole(tenant, accessRoleCode)
+    user.accessRoleCode = accessRoleCode
   }
-  if (body.active !== undefined) user.active = Boolean(body.active)
+  if (body.accessRoleCode !== undefined || body.accountType !== undefined || body.permissionGrants !== undefined || body.permissionRevokes !== undefined) {
+    Object.assign(user, await resolveOverrides(tenant, body, user.role, user))
+  }
+  if (body.active !== undefined) {
+    if (isSelf && !body.active) throw httpError(400, 'You cannot deactivate your own account')
+    user.active = Boolean(body.active)
+  }
   await user.save()
   return serialize(user)
 }

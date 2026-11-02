@@ -2,8 +2,10 @@
 const cache = new Map();
 const { currentTenant } = require('./tenantContext')
 
+// Store reads are branch-scoped, so cached results must be too.
 function scopedKey(key) {
-  return `${currentTenant().ownerKey}:${key}`
+  const tenant = currentTenant()
+  return `${tenant.ownerKey}:${tenant.branchCode || ''}:${key}`
 }
 
 class CacheManager {

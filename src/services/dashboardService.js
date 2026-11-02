@@ -2,6 +2,7 @@ const storeModel = require('../models/storeModel')
 const { formatCurrency } = require('../utils/formatters')
 const { currencyFromSettings } = require('../utils/settings')
 const CacheManager = require('../utils/cache')
+const { purchaseTotal } = require('../utils/profitCalculator')
 
 /**
  * Get dashboard with caching for improved performance
@@ -26,10 +27,11 @@ async function getDashboard(filters = {}) {
   const result = {
     categories: [...new Set(store.inventory.map((item) => item.category).filter(Boolean))].sort(),
     metrics: [
-      { label: 'Total Products', value: summary.totalProducts.toLocaleString('en-US'), delta: `${summary.lowStockCount} low stock` },
-      { label: 'Total Sales', value: formatCurrency(summary.totalSales, currency), delta: `${sales.length} orders` },
-      { label: 'Total Purchases', value: formatCurrency(summary.totalPurchases, currency), delta: `${purchases.length} orders` },
-      { label: 'Available Stock', value: `${summary.availableStock.toFixed(1)}%`, delta: `${summary.stockAvailable} units` },
+      { label: 'Sales', value: formatCurrency(summary.totalSales, currency), delta: `${sales.length} orders` },
+      { label: 'Purchases', value: formatCurrency(summary.totalPurchases, currency), delta: `${purchases.length} orders` },
+      { label: 'Products', value: summary.totalProducts.toLocaleString('en-US'), delta: '' },
+      { label: 'Units in stock', value: summary.stockAvailable.toLocaleString('en-US', { maximumFractionDigits: 1 }), delta: '' },
+      { label: 'Low stock', value: summary.lowStockCount.toLocaleString('en-US'), delta: '' },
     ],
     salesBars: rangeBars(sales, from, to),
     salesLabels: rangeLabels(sales, from, to),
@@ -43,20 +45,15 @@ async function getDashboard(filters = {}) {
 }
 
 function totals(store, sales, purchases, inventory) {
-  const stockCapacity = inventory.reduce((sum, item) => sum + Number(item.capacity || 0), 0)
   const stockAvailable = inventory.reduce((sum, item) => sum + Number(item.stock || 0), 0)
   const salesValue = sales.reduce((sum, sale) => sum + Number(sale.value || 0), 0)
-  const purchaseValue = purchases.reduce(
-    (sum, purchase) => sum + Number(purchase.quantity || 0) * Number(purchase.unitPrice || 0),
-    0,
-  )
-  const lowStockCount = inventory.filter((item) => Number(item.stock || 0) <= stockThreshold(item, store.settings.inventory.lowStockThreshold)).length
+  const purchaseValue = purchases.reduce((sum, purchase) => sum + purchaseTotal(purchase), 0)
+  const lowStockCount = inventory.filter((item) => Number(item.stock || 0) <= stockThreshold(item, store.settings?.inventory?.lowStockThreshold)).length
 
   return {
     totalProducts: inventory.length,
     totalSales: salesValue,
     totalPurchases: purchaseValue,
-    availableStock: stockCapacity ? (stockAvailable / stockCapacity) * 100 : 0,
     stockAvailable,
     lowStockCount,
   }
@@ -64,14 +61,18 @@ function totals(store, sales, purchases, inventory) {
 
 function lowStockAlerts(store) {
   return store.inventory
-    .filter((item) => Number(item.stock || 0) <= stockThreshold(item, store.settings.inventory.lowStockThreshold))
-    .sort((a, b) => a.stock - b.stock)
-    .map((item) => ({
-      name: item.item,
-      sku: item.sku,
-      status: item.stock === 0 ? 'Out of Stock' : `${item.stock} left`,
-      action: item.stock === 0 ? 'Urgent Restock' : 'Quick Reorder',
-    }))
+    .filter((item) => Number(item.stock || 0) <= stockThreshold(item, store.settings?.inventory?.lowStockThreshold))
+    .sort((a, b) => Number(a.stock || 0) - Number(b.stock || 0))
+    .slice(0, 20)
+    .map((item) => {
+      const stock = Number(item.stock || 0)
+      return {
+        name: item.item,
+        sku: item.sku,
+        status: stock <= 0 ? 'Out of Stock' : `${stock} left`,
+        action: stock <= 0 ? 'Urgent Restock' : 'Quick Reorder',
+      }
+    })
 }
 
 function filterInventory(inventory, settings, category, stockStatus) {
@@ -79,7 +80,7 @@ function filterInventory(inventory, settings, category, stockStatus) {
     if (category && item.category !== category) return false
     const stock = Number(item.stock || 0)
     if (stockStatus === 'out' && stock !== 0) return false
-    const threshold = stockThreshold(item, settings.inventory.lowStockThreshold)
+    const threshold = stockThreshold(item, settings?.inventory?.lowStockThreshold)
     if (stockStatus === 'low' && (stock === 0 || stock > threshold)) return false
     if (stockStatus === 'available' && stock <= threshold) return false
     return true
@@ -87,8 +88,8 @@ function filterInventory(inventory, settings, category, stockStatus) {
 }
 
 function stockThreshold(item, fallback) {
-  const reorderLevel = Number(item.reorderLevel || 0)
-  return reorderLevel > 0 ? reorderLevel : Number(fallback || 25)
+  const reorderLevel = Number(item.reorderLevel || item.minimumStock || 0)
+  return reorderLevel > 0 ? reorderLevel : Number(fallback ?? 5)
 }
 
 function catalogItems(store) {
@@ -143,6 +144,9 @@ function chartRange(sales, from, to) {
     : dates.length
       ? new Date(Math.min(...dates))
       : new Date(end.getFullYear() - 1, end.getMonth(), end.getDate())
+  // A single-day range would label every bar with the same date, so show at least a week.
+  const minimumSpan = 6 * 24 * 60 * 60 * 1000
+  if (end.getTime() - start.getTime() < minimumSpan) start.setTime(end.getTime() - minimumSpan)
   return { start, end }
 }
 

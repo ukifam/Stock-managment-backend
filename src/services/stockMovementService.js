@@ -3,6 +3,7 @@ const httpError = require('../utils/httpError')
 const { required } = require('../utils/validation')
 const CacheManager = require('../utils/cache')
 const { currentTenant } = require('../utils/tenantContext')
+const { escapeRegex, inventoryStatus } = require('../utils/inventoryMatch')
 
 async function listStockMovements({ sku, type, search, page = 1, limit = 50 }) {
   const pageNum = Math.max(1, parseInt(page, 10) || 1)
@@ -10,18 +11,19 @@ async function listStockMovements({ sku, type, search, page = 1, limit = 50 }) {
   
   const query = {}
   if (sku) {
-    query.sku = { $regex: sku, $options: 'i' }
+    query.sku = { $regex: escapeRegex(sku), $options: 'i' }
   }
   if (type && type !== 'ALL') {
     query.type = type
   }
   if (search) {
+    const pattern = { $regex: escapeRegex(search), $options: 'i' }
     query.$or = [
-      { sku: { $regex: search, $options: 'i' } },
-      { reason: { $regex: search, $options: 'i' } },
-      { reference: { $regex: search, $options: 'i' } },
-      { partner: { $regex: search, $options: 'i' } },
-      { user: { $regex: search, $options: 'i' } }
+      { sku: pattern },
+      { reason: pattern },
+      { reference: pattern },
+      { partner: pattern },
+      { user: pattern },
     ]
   }
   const skip = (pageNum - 1) * limitNum
@@ -81,7 +83,7 @@ async function adjustStock(body) {
   store.inventory[inventoryIndex] = {
     ...item,
     stock: newStock,
-    status: newStock <= 0 ? 'Out of Stock' : (newStock <= (item.capacity * 0.2) ? 'Low' : 'Active')
+    status: inventoryStatus(newStock, item),
   }
 
   // Create the movement record
@@ -154,7 +156,7 @@ async function sendToShowcase(body) {
   store.inventory[inventoryIndex] = {
     ...item,
     stock: newStock,
-    status: inventoryStatus(newStock, item.capacity),
+    status: inventoryStatus(newStock, item),
   }
 
   const movement = await storeModel.StockMovement.create({
@@ -300,12 +302,6 @@ async function closeShowcase(reference, body) {
     stockAlreadyDeducted: true,
     showcase: { reference },
   })
-}
-
-function inventoryStatus(stock, capacity) {
-  if (stock <= 0) return 'Out of Stock'
-  if (stock <= Number(capacity || 0) * 0.2) return 'Low'
-  return 'Active'
 }
 
 /**

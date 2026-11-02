@@ -33,6 +33,8 @@ async function authMiddleware(req, res, next) {
       ownerKey: account.ownerKey,
       ownerEmail: account.ownerEmail,
       accessRoleCode: account.accessRoleCode || '',
+      permissionGrants: account.permissionGrants || [],
+      permissionRevokes: account.permissionRevokes || [],
       branchCodes: account.branchCodes || [],
       defaultBranchCode: account.defaultBranchCode || MAIN_BRANCH_CODE,
     }
